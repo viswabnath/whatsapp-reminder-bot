@@ -104,19 +104,18 @@ app.post("/webhook", async (req, res) => {
       }
     }
 
-    // ---------------------------------------------------------
+   // ---------------------------------------------------------
     // ROUTE 3: STANDARD ONE-OFF REMINDERS
     // ---------------------------------------------------------
     else {
       const reminderTime = extractReminderTime(message);
 
       if (reminderTime) {
-        // We no longer need group logic; the address book handles it!
         const cleanMsg = extractCleanMessage(message, targetName === "you" ? null : targetName);
 
         const { error } = await supabase.from("personal_reminders").insert([
           {
-            phone: targetPhone, // Save it for the right person
+            phone: targetPhone, 
             message: cleanMsg,
             reminder_time: reminderTime,
             group_name: targetName === "you" ? null : targetName,
@@ -135,15 +134,13 @@ app.post("/webhook", async (req, res) => {
             `✅ Reminder set for ${targetName} at ${displayTime}`
           );
         }
-      }
-
+      } 
+      
       // ---------------------------------------------------------
-      // FALLBACK / HELP MENU (When she doesn't understand)
+      // THE GREETING (When you say Hi/Hello)
       // ---------------------------------------------------------
-      else {
-        const helpText = `I'm sorry Viswanath, I cannot perform that action or understand that text yet. 🤖
-
-To save things to my memory, please use these exact formats:
+      else if (lowerMsg === "hi" || lowerMsg === "hello" || lowerMsg === "hey") {
+        const welcomeText = `Hi Viswanath! 👋 I'm Manvi, your Second Brain. Here is how you can save things to my memory:
 
 📌 *One-off Tasks:* Just tell me a time!
 _Example: "Remind me at 4:00 PM to review Onemark Stories"_
@@ -154,7 +151,21 @@ _Example: "Routine: remind dad to take medicine at 18:00"_
 🎉 *Special Events:* Start with "Birthday:" or "Anniversary:" followed by the name and YYYY-MM-DD date.
 _Example: "Birthday: Manojna 2026-02-09"_`;
 
-        await sendWhatsAppMessage(phone, helpText);
+        await sendWhatsAppMessage(phone, welcomeText);
+      }
+
+      // ---------------------------------------------------------
+      // THE TRUE ERROR FALLBACK (When she actually doesn't understand)
+      // ---------------------------------------------------------
+      else {
+        const errorText = `I'm sorry Viswanath, I cannot perform that action or understand that text yet. 🤖
+
+Please try again using one of my exact formats:
+📌 *Time-based:* "Remind me at 4:00 PM..."
+🔄 *Routine:* "Routine: punch logout at 18:00"
+🎉 *Event:* "Birthday: Manojna 2026-02-09"`;
+
+        await sendWhatsAppMessage(phone, errorText);
       }
     }
   }
