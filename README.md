@@ -12,9 +12,9 @@ Most reminder apps force you to leave WhatsApp, open another app, navigate menus
 
 **Manvi lives where you already are** — inside WhatsApp. You type like you're texting a friend:
 
-```
+\`\`\`
 "Remind me at 4 PM to review Onemark Stories"
-```
+\`\`\`
 
 Done. Manvi parses the message, stores it securely in PostgreSQL, and pings you exactly at 4 PM. No app switching. No friction.
 
@@ -22,15 +22,18 @@ Done. Manvi parses the message, stores it securely in PostgreSQL, and pings you 
 
 ## ✨ What Manvi Does
 
-```
-🔔  One-Off Reminders      "Remind me at 3 PM to call Manojna"
+\`\`\`text
+🔔  One-Off Reminders      "Remind me at 3 PM to call user"
                           Natural language → instant scheduling
 
 🔄  Daily Routines         "Routine: remind dad to take medicine at 09:00"
                           Set it once, runs every day forever
 
-🎂  Yearly Events          "Birthday: User 2026-02-09"
+🎂  Yearly Events          "Birthday: user 2026-02-09"
                           Never miss a birthday or anniversary again
+
+✉️  Instant Dispatch       "Tell user I will be 10 minutes late"
+                          Forwards messages instantly via the bot
 
 📇  Secure Address Book    "Remind mom at 7 PM…"
                           Contacts stored in Supabase, never in code
@@ -38,32 +41,36 @@ Done. Manvi parses the message, stores it securely in PostgreSQL, and pings you 
 ⏰  IST-Native Cron        Runs on Indian Standard Time, no timezone bugs
 
 ☁️  Cloud-Native           Deployed on Render, runs 24/7, never forgets
-```
+\`\`\`
 
 ---
 
 ## 🎯 How to Talk to Manvi
 
 ### One-Off Tasks — Just mention a time
-
-```
+\`\`\`text
 You:   Remind me at 4:00 PM to review Onemark Stories
-Manvi: ✅ Got it. I'll remind you at 4:00 PM today.
-```
+Manvi: ✅ Reminder set for you at 4:00 PM
+\`\`\`
 
 ### Daily Routines — Start with "Routine:"
-
-```
+\`\`\`text
 You:   Routine: remind dad to take his medicine at 09:00
-Manvi: ✅ Daily routine set for Dad at 9:00 AM.
-```
+Manvi: 🔄 Daily routine set! I'll remind dad to "take his medicine" every day at 09:00.
+\`\`\`
 
 ### Special Events — Start with "Birthday:" or "Anniversary:"
+\`\`\`text
+You:   Birthday: Manojna 2026-02-09
+Manvi: 🎉 Got it! I've saved Manojna's birthday in my memory.
+\`\`\`
 
-```
-You:   Birthday: User 2026-02-09
-Manvi: ✅ I'll remind you about User's birthday on Feb 9, 2026.
-```
+### Instant Messages — Start with "Tell" or "Send message to"
+\`\`\`text
+You:   Tell user I am heading home now
+Manvi: ✅ Message successfully sent to user!
+(user receives: ✨ Message from Viswanath: I am heading home now)
+\`\`\`
 
 ---
 
@@ -83,7 +90,7 @@ Manvi: ✅ I'll remind you about User's birthday on Feb 9, 2026.
 
 Manvi's brain runs on four Supabase tables. Run these in your Supabase SQL Editor:
 
-```sql
+\`\`\`sql
 -- 1. Address Book — names → phone numbers
 CREATE TABLE contacts (
   id SERIAL PRIMARY KEY,
@@ -120,7 +127,7 @@ CREATE TABLE special_events (
   event_date DATE NOT NULL,
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
-```
+\`\`\`
 
 ---
 
@@ -128,17 +135,17 @@ CREATE TABLE special_events (
 
 ### 1 · Clone the repo
 
-```bash
+\`\`\`bash
 git clone https://github.com/viswabnath/whatsapp-reminder-bot.git
 cd whatsapp-reminder-bot
 npm install
-```
+\`\`\`
 
 ### 2 · Configure secrets
 
 Create a `.env` file — **never commit this**:
 
-```env
+\`\`\`env
 PORT=3000
 VERIFY_TOKEN=your_custom_verify_token_here
 MY_PHONE_NUMBER=your_whatsapp_number_with_country_code
@@ -150,13 +157,13 @@ ACCESS_TOKEN=your_meta_access_token_here
 # Supabase
 SUPABASE_URL=https://[your-project-id].supabase.co
 SUPABASE_KEY=your_supabase_secret_key
-```
+\`\`\`
 
 ### 3 · Run locally
 
-```bash
-npm start
-```
+\`\`\`bash
+node src/server.js
+\`\`\`
 
 Manvi will be live at `http://localhost:3000`
 
@@ -167,82 +174,51 @@ Manvi will be live at `http://localhost:3000`
 Meta requires two different tokens — they do completely different things.
 
 ### `VERIFY_TOKEN` — Webhook Verification
-
-When you set up the webhook in Meta's Developer Dashboard, Meta pings your server with a challenge to verify you own it. You invent a random string (e.g., `onemark_manvi_2025`), put it in `.env` as `VERIFY_TOKEN`, and paste the exact same string into the Meta Dashboard.
+When you set up the webhook in Meta's Developer Dashboard, Meta pings your server with a challenge to verify you own it. You invent a random string, put it in `.env` as `VERIFY_TOKEN`, and paste the exact same string into the Meta Dashboard.
 
 ### `ACCESS_TOKEN` — Sending Messages
-
 This token authorizes Manvi to send WhatsApp messages via the Meta Cloud API.
 
-**⚠️ Important: The 24-Hour Expiry Rule**
-
-- **For Development:** Meta gives you a Temporary Access Token that expires every 24 hours. You'll need to click "Refresh" in the Meta Dashboard daily and update your `.env`. If it expires, you'll see `AxiosError: 401 (Unauthorized)` in logs.
-  
-- **For Production:** Create a System User in Meta Business Settings and generate a Permanent Access Token with `whatsapp_business_messaging` permissions. This never expires.
+**⚠️ Important: The Expiry Rule**
+- **For Development:** Meta gives you a Temporary Access Token that expires every 24 hours. If it expires, you'll see `AxiosError: 401 (Unauthorized)` in logs.
+- **For Production:** Generate a 60-day token via the Graph API, or create a System User in Meta Business Settings and generate a Permanent Access Token.
 
 ---
 
 ## ☁️ Deploy to Render
 
 ### 1 · Create a new Web Service
-
 Connect your GitHub repo to Render.
 
 ### 2 · Build & Start Commands
-
-```
+\`\`\`text
 Build Command:  npm install
 Start Command:  node src/server.js
-```
+\`\`\`
 
 ### 3 · Add Environment Variables
-
 Copy all variables from your `.env` into Render's **Environment Variables** section.
 
 ### 4 · Configure Meta Webhook
-
-Once deployed, take your Render URL, append `/webhook`, and paste it into the Meta App Dashboard.
-
-Example: `https://manvi-onemark.onrender.com/webhook`
+Once deployed, take your Render URL, append `/webhook`, and paste it into the Meta App Dashboard. Example: `https://manvi-onemark.onrender.com/webhook`
 
 ---
 
 ## 📁 Project Structure
 
-```
+\`\`\`text
 whatsapp-reminder-bot/
 ├── src/
-│   ├── server.js           # Express server + webhook handler
-│   ├── routes/
-│   │   ├── reminders.js    # One-off reminder logic
-│   │   ├── routines.js     # Daily routine handler
-│   │   └── events.js       # Birthday/anniversary tracker
-│   ├── cron/
-│   │   └── scheduler.js    # node-cron IST job runner
-│   └── utils/
-│       ├── parser.js       # Natural language date/time extraction
-│       └── meta.js         # Meta Cloud API wrapper
+│   ├── server.js           # Express server, webhook handler & routing
+│   ├── scheduler.js        # node-cron IST job runner
+│   ├── supabase.js         # Database connection client
+│   ├── sendMessage.js      # Meta WhatsApp API wrapper
+│   └── parser.js           # Natural language date/time extraction
 ├── .env                    # 🔒 Never commit — secrets only
 ├── .gitignore
 ├── package.json
 └── README.md
-```
-
----
-
-## 🐛 Common Issues
-
-### "Webhook verification failed"
-
-Your `VERIFY_TOKEN` in `.env` doesn't match what you entered in the Meta Dashboard. They must be identical.
-
-### "401 Unauthorized" when sending messages
-
-Your `ACCESS_TOKEN` expired (24-hour limit for temporary tokens). Refresh it in the Meta Dashboard and update `.env`.
-
-### "Reminder didn't fire at the right time"
-
-Check your server's timezone. Manvi uses IST by default — if your server is in UTC, cron jobs will fire 5.5 hours early.
+\`\`\`
 
 ---
 
@@ -251,14 +227,11 @@ Check your server's timezone. Manvi uses IST by default — if your server is in
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Node.js Version](https://img.shields.io/badge/node-%3E%3D16.0.0-brightgreen)](https://nodejs.org)
 [![Maintained by Onemark](https://img.shields.io/badge/Maintained%20by-Onemark-ff69b4)](https://onemark.digital)
-```
-**License:**
-```
-MIT License (standard for open-source tools)
+
+**License:** MIT License (standard for open-source tools)
 
 Built with care by [Onemark](https://onemark.digital)  
 Maintained by [Viswanath Bodasakurthi](https://github.com/viswabnath)
 
 ---
-
 *Manvi means "Goddess of Knowledge" in Sanskrit — a fitting name for your second brain.*

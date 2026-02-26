@@ -39,7 +39,7 @@ app.post("/webhook", async (req, res) => {
     if (contacts) {
       for (const contact of contacts) {
         if (lowerMsg.includes(contact.name.toLowerCase())) {
-          targetPhone = contact.phone; // Swap to Mom/Dad's number!
+          targetPhone = contact.phone; // Swap to Mom/Dad/Manu's number!
           targetName = contact.name;
           break;
         }
@@ -65,7 +65,6 @@ app.post("/webhook", async (req, res) => {
       ]);
 
       if (!error) {
-        // Send confirmation back to the sender
         await sendWhatsAppMessage(
           phone, 
           `🎉 Got it! I've saved ${personName}'s ${eventType} in my memory.`
@@ -90,7 +89,6 @@ app.post("/webhook", async (req, res) => {
           },
         ]);
         if (!error) {
-          // Send confirmation back to the sender
           await sendWhatsAppMessage(
             phone,
             `🔄 Daily routine set! I'll remind ${targetName} to "${taskName}" every day at ${reminderTime}.`
@@ -104,7 +102,32 @@ app.post("/webhook", async (req, res) => {
       }
     }
 
-   // ---------------------------------------------------------
+    // ---------------------------------------------------------
+    // ROUTE 4: INSTANT MESSAGES (The Dispatcher)
+    // ---------------------------------------------------------
+    else if (lowerMsg.startsWith("send message to ") || lowerMsg.startsWith("tell ")) {
+      
+      // If targetName is still "you", she didn't find the name in Supabase
+      if (targetName === "you") {
+        await sendWhatsAppMessage(phone, "I couldn't find that person in your address book. Make sure their name is spelled exactly as it is in the database.");
+      } else {
+        // Strip out the command words and the person's name to get the pure message
+        let pureMessage = message
+          .replace(/send message to/gi, "")
+          .replace(/tell/gi, "")
+          .replace(new RegExp(targetName, "gi"), "") // Removes the contact name
+          .replace(/saying/gi, "") // Removes extra connecting words
+          .trim();
+
+        // Send the message instantly to the contact's number
+        await sendWhatsAppMessage(targetPhone, `✨ Message from Viswanath: ${pureMessage}`);
+        
+        // Send a receipt back to YOU
+        await sendWhatsAppMessage(phone, `✅ Message successfully sent to ${targetName}!`);
+      }
+    }
+
+    // ---------------------------------------------------------
     // ROUTE 3: STANDARD ONE-OFF REMINDERS
     // ---------------------------------------------------------
     else {
@@ -149,7 +172,10 @@ _Example: "Remind me at 4:00 PM to review Onemark Stories"_
 _Example: "Routine: remind dad to take medicine at 18:00"_
 
 🎉 *Special Events:* Start with "Birthday:" or "Anniversary:" followed by the name and YYYY-MM-DD date.
-_Example: "Birthday: Manojna 2026-02-09"_`;
+_Example: "Birthday: Manojna 2026-02-09"_
+
+✉️ *Instant Message:* Forward a message to a contact right now!
+_Example: "Tell manu I will be 10 minutes late"_`;
 
         await sendWhatsAppMessage(phone, welcomeText);
       }
@@ -163,7 +189,8 @@ _Example: "Birthday: Manojna 2026-02-09"_`;
 Please try again using one of my exact formats:
 📌 *Time-based:* "Remind me at 4:00 PM..."
 🔄 *Routine:* "Routine: punch logout at 18:00"
-🎉 *Event:* "Birthday: Manojna 2026-02-09"`;
+🎉 *Event:* "Birthday: Manojna 2026-02-09"
+✉️ *Instant Message:* "Tell manu..."`;
 
         await sendWhatsAppMessage(phone, errorText);
       }
