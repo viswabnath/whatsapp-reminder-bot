@@ -4,7 +4,12 @@ require("dotenv").config();
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
 async function analyzeMessage(userMessage) {
- const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+  // 1. Force the AI into strict JSON mode
+  const model = genAI.getGenerativeModel({ 
+    model: "gemini-1.5-flash",
+    generationConfig: { responseMimeType: "application/json" }
+  });
+  
   const currentIST = new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" });
 
   const prompt = `
@@ -27,7 +32,7 @@ async function analyzeMessage(userMessage) {
     "taskOrMessage": "The cleaned up task/message. For deletions, extract what needs to be deleted (e.g., 'drink water')"
   }
 
- Examples:
+  Examples:
   Message: "What contacts do you have?"
   JSON: {"intent": "query_contacts", "targetName": "you", "time": null, "date": null, "taskOrMessage": null}
 
@@ -64,11 +69,18 @@ async function analyzeMessage(userMessage) {
 
   try {
     const result = await model.generateContent(prompt);
-    const cleanJSON = result.response.text().replace(/```json/g, '').replace(/```/g, '').trim();
-    return JSON.parse(cleanJSON);
+    let text = result.response.text();
+    
+    // 2. Aggressively extract ONLY the JSON block (ignoring any polite filler text)
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) {
+      throw new Error("No JSON object found in AI response.");
+    }
+    
+    return JSON.parse(jsonMatch[0]);
+    
   } catch (error) {
     console.error("Gemini Parsing Error:", error);
-    // 🚦 Catch the Quota Limit Error Gracefully
     if (error.message && (error.message.includes("429") || error.message.includes("quota") || error.message.includes("Too Many Requests"))) {
       return { intent: "error_quota" };
     }
