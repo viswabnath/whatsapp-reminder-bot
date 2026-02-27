@@ -4,7 +4,7 @@ require("dotenv").config();
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
 async function analyzeMessage(userMessage) {
-  const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+ const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
   const currentIST = new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" });
 
   const prompt = `
