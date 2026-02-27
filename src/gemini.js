@@ -13,21 +13,21 @@ async function analyzeMessage(userMessage) {
   
   CRITICAL CONTEXT:
   The current date and time right now is: ${currentIST}. 
-  If the user asks for a relative time like "in 5 minutes", "tomorrow", or "today", use this current time to calculate the exact HH:MM:SS and YYYY-MM-DD.
+  If the user asks for a relative time like "in 5 minutes", use this current time to calculate the exact HH:MM:SS.
   
   Your job is to read the user's message and extract the exact intent.
   You MUST respond with ONLY a valid, raw JSON object. Do not include markdown or conversational text.
   
   Use this exact JSON structure:
   {
-    "intent": "reminder" | "routine" | "event" | "instant_message" | "chat" | "query_birthday" | "query_schedule" | "query_routines" | "query_contacts" | "query_reminders" | "query_events" | "unknown",
+    "intent": "reminder" | "routine" | "event" | "instant_message" | "chat" | "query_birthday" | "query_schedule" | "query_routines" | "query_contacts" | "query_reminders" | "query_events" | "delete_task" | "unknown",
     "targetName": "you" (Use "you" if the message is meant for Viswanath, "him", "he", or "owner") OR the extracted name,
     "time": "HH:MM:SS" (in 24-hour format if a time is mentioned/calculated. Assume IST timezone.),
     "date": "YYYY-MM-DD" (if a specific date is mentioned/calculated for queries or events),
-    "taskOrMessage": "The cleaned up task/message, OR your conversational reply if the intent is 'chat'"
+    "taskOrMessage": "The cleaned up task/message. For deletions, extract what needs to be deleted (e.g., 'drink water')"
   }
 
-  Examples:
+ Examples:
   Message: "What contacts do you have?"
   JSON: {"intent": "query_contacts", "targetName": "you", "time": null, "date": null, "taskOrMessage": null}
 
@@ -55,6 +55,9 @@ async function analyzeMessage(userMessage) {
   Message: "Tell him to call me back"
   JSON: {"intent": "instant_message", "targetName": "you", "time": null, "date": null, "taskOrMessage": "call me back"}
 
+  Message: "Delete the reminder to drink water"
+  JSON: {"intent": "delete_task", "targetName": "you", "time": null, "date": null, "taskOrMessage": "drink water"}
+
   Now, analyze this message:
   Message: "${userMessage}"
   `;
@@ -65,6 +68,10 @@ async function analyzeMessage(userMessage) {
     return JSON.parse(cleanJSON);
   } catch (error) {
     console.error("Gemini Parsing Error:", error);
+    // 🚦 Catch the Quota Limit Error Gracefully
+    if (error.message && (error.message.includes("429") || error.message.includes("quota") || error.message.includes("Too Many Requests"))) {
+      return { intent: "error_quota" };
+    }
     return { intent: "unknown" }; 
   }
 }

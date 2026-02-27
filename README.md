@@ -168,6 +168,7 @@ CREATE TABLE interaction_logs (
   sender_name VARCHAR(50),
   sender_phone VARCHAR(20) NOT NULL,
   message TEXT NOT NULL,
+  bot_response TEXT,
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 ```
