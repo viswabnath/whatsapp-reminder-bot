@@ -1,12 +1,46 @@
 const express = require("express");
 require("dotenv").config();
-const { extractReminderTime, extractCleanMessage } = require("./parser");
 const supabase = require("./supabase");
+const sendWhatsAppMessage = require("./sendMessage");
+const { analyzeMessage } = require("./gemini"); // 🧠 Injecting the AI Brain!
 
 const app = express();
-const sendWhatsAppMessage = require("./sendMessage");
 app.use(express.json());
 
+// ---------------------------------------------------------
+// HEALTH CHECK (Keeps Render Awake)
+// ---------------------------------------------------------
+app.get("/", (req, res) => {
+  res.status(200).send("Manvi is awake! 🧠");
+});
+
+// ---------------------------------------------------------
+// HELPER: Convert AI "HH:MM:SS" to a Supabase IST Timestamp
+// ---------------------------------------------------------
+function buildReminderDate(timeString) {
+  const now = new Date();
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit'
+  });
+  const parts = formatter.formatToParts(now);
+  const year = parts.find(p => p.type === 'year').value;
+  const month = parts.find(p => p.type === 'month').value;
+  const day = parts.find(p => p.type === 'day').value;
+  
+  // Construct a strict ISO string mapped to IST (+05:30)
+  const isoString = `${year}-${month}-${day}T${timeString}+05:30`;
+  let reminderDate = new Date(isoString);
+
+  // If the time has already passed today, schedule it for tomorrow
+  if (reminderDate < now) {
+    reminderDate.setDate(reminderDate.getDate() + 1);
+  }
+  return reminderDate.toISOString();
+}
+
+// ---------------------------------------------------------
+// WEBHOOK VERIFICATION (Meta Setup)
+// ---------------------------------------------------------
 app.get("/webhook", (req, res) => {
   const mode = req.query["hub.mode"];
   const token = req.query["hub.verify_token"];
@@ -19,185 +53,158 @@ app.get("/webhook", (req, res) => {
   }
 });
 
+// ---------------------------------------------------------
+// THE CORE ENGINE: Handling Incoming Messages
+// ---------------------------------------------------------
 app.post("/webhook", async (req, res) => {
+  // 🚀 INSTANT RECEIPT: Tell Meta we got the message to prevent duplicate pings!
+  res.sendStatus(200);
+
   const body = req.body;
   const messageData = body.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
 
-  if (messageData?.text?.body) {
-    const message = messageData.text.body;
-    const phone = messageData.from; // This is the sender's phone number
-    const lowerMsg = message.toLowerCase();
+  if (!messageData?.text?.body) return;
 
-    // ---------------------------------------------------------
-    // THE ADDRESS BOOK: Find out WHO this message is for
-    // ---------------------------------------------------------
-    let targetPhone = process.env.MY_PHONE_NUMBER; // Defaults to YOU from .env
-    let targetName = "you";
+  const message = messageData.text.body;
+  const senderPhone = messageData.from; 
+  const lowerMsg = message.toLowerCase().trim();
 
-    const { data: contacts } = await supabase.from("contacts").select("*");
+  // ---------------------------------------------------------
+  // 1. CALLER ID: Identify who is texting Manvi
+  // ---------------------------------------------------------
+  let senderName = "Guest";
+  let isOwner = false;
+
+  if (senderPhone === process.env.MY_PHONE_NUMBER) {
+    senderName = "Viswanath";
+    isOwner = true;
+  } else {
+    // Look up the incoming phone number in your Supabase Address Book
+    const { data: senderContact } = await supabase
+      .from("contacts")
+      .select("name")
+      .eq("phone", senderPhone)
+      .single();
     
-    if (contacts) {
-      for (const contact of contacts) {
-        if (lowerMsg.includes(contact.name.toLowerCase())) {
-          targetPhone = contact.phone; // Swap to Mom/Dad/Manu's number!
-          targetName = contact.name;
-          break;
-        }
-      }
-    }
-
-    // ---------------------------------------------------------
-    // ROUTE 1: SPECIAL EVENTS (Birthdays / Anniversaries)
-    // ---------------------------------------------------------
-    if (lowerMsg.startsWith("birthday:") || lowerMsg.startsWith("anniversary:")) {
-      const parts = message.split(" ");
-      const eventType = parts[0].replace(":", "").toLowerCase();
-      const personName = parts[1];
-      const eventDate = parts[2];
-
-      const { error } = await supabase.from("special_events").insert([
-        {
-          phone: targetPhone,
-          event_type: eventType,
-          person_name: personName,
-          event_date: eventDate,
-        },
-      ]);
-
-      if (!error) {
-        await sendWhatsAppMessage(
-          phone, 
-          `🎉 Got it! I've saved ${personName}'s ${eventType} in my memory.`
-        );
-      }
-    }
-
-    // ---------------------------------------------------------
-    // ROUTE 2: DAILY ROUTINES
-    // ---------------------------------------------------------
-    else if (lowerMsg.startsWith("routine:")) {
-      const timeMatch = message.match(/at (\d{2}:\d{2})/);
-      const reminderTime = timeMatch ? timeMatch[1] : null;
-      const taskName = message.replace(/routine:|at \d{2}:\d{2}/gi, "").trim();
-
-      if (reminderTime && taskName) {
-        const { error } = await supabase.from("daily_routines").insert([
-          {
-            phone: targetPhone,
-            task_name: taskName,
-            reminder_time: `${reminderTime}:00`,
-          },
-        ]);
-        if (!error) {
-          await sendWhatsAppMessage(
-            phone,
-            `🔄 Daily routine set! I'll remind ${targetName} to "${taskName}" every day at ${reminderTime}.`
-          );
-        }
-      } else {
-        await sendWhatsAppMessage(
-          phone,
-          `I didn't quite catch the time. Please use 24-hour format, like "Routine: Punch logout at 18:00"`
-        );
-      }
-    }
-
-    // ---------------------------------------------------------
-    // ROUTE 4: INSTANT MESSAGES (The Dispatcher)
-    // ---------------------------------------------------------
-    else if (lowerMsg.startsWith("send message to ") || lowerMsg.startsWith("tell ")) {
-      
-      // If targetName is still "you", she didn't find the name in Supabase
-      if (targetName === "you") {
-        await sendWhatsAppMessage(phone, "I couldn't find that person in your address book. Make sure their name is spelled exactly as it is in the database.");
-      } else {
-        // Strip out the command words and the person's name to get the pure message
-        let pureMessage = message
-          .replace(/send message to/gi, "")
-          .replace(/tell/gi, "")
-          .replace(new RegExp(targetName, "gi"), "") // Removes the contact name
-          .replace(/saying/gi, "") // Removes extra connecting words
-          .trim();
-
-        // Send the message instantly to the contact's number
-        await sendWhatsAppMessage(targetPhone, `✨ Message from Viswanath: ${pureMessage}`);
-        
-        // Send a receipt back to YOU
-        await sendWhatsAppMessage(phone, `✅ Message successfully sent to ${targetName}!`);
-      }
-    }
-
-    // ---------------------------------------------------------
-    // ROUTE 3: STANDARD ONE-OFF REMINDERS
-    // ---------------------------------------------------------
-    else {
-      const reminderTime = extractReminderTime(message);
-
-      if (reminderTime) {
-        const cleanMsg = extractCleanMessage(message, targetName === "you" ? null : targetName);
-
-        const { error } = await supabase.from("personal_reminders").insert([
-          {
-            phone: targetPhone, 
-            message: cleanMsg,
-            reminder_time: reminderTime,
-            group_name: targetName === "you" ? null : targetName,
-          },
-        ]);
-
-        if (!error) {
-          const displayTime = reminderTime.toLocaleTimeString("en-US", {
-            timeZone: "Asia/Kolkata",
-            hour: "numeric",
-            minute: "2-digit",
-            hour12: true,
-          });
-          await sendWhatsAppMessage(
-            phone,
-            `✅ Reminder set for ${targetName} at ${displayTime}`
-          );
-        }
-      } 
-      
-      // ---------------------------------------------------------
-      // THE GREETING (When you say Hi/Hello)
-      // ---------------------------------------------------------
-      else if (lowerMsg === "hi" || lowerMsg === "hello" || lowerMsg === "hey") {
-        const welcomeText = `Hi Viswanath! 👋 I'm Manvi, your Second Brain. Here is how you can save things to my memory:
-
-📌 *One-off Tasks:* Just tell me a time!
-_Example: "Remind me at 4:00 PM to review Onemark Stories"_
-
-🔄 *Daily Routines:* Start with "Routine:" and use 24-hour time.
-_Example: "Routine: remind dad to take medicine at 18:00"_
-
-🎉 *Special Events:* Start with "Birthday:" or "Anniversary:" followed by the name and YYYY-MM-DD date.
-_Example: "Birthday: Manojna 2026-02-09"_
-
-✉️ *Instant Message:* Forward a message to a contact right now!
-_Example: "Tell manu I will be 10 minutes late"_`;
-
-        await sendWhatsAppMessage(phone, welcomeText);
-      }
-
-      // ---------------------------------------------------------
-      // THE TRUE ERROR FALLBACK (When she actually doesn't understand)
-      // ---------------------------------------------------------
-      else {
-        const errorText = `I'm sorry Viswanath, I cannot perform that action or understand that text yet. 🤖
-
-Please try again using one of my exact formats:
-📌 *Time-based:* "Remind me at 4:00 PM..."
-🔄 *Routine:* "Routine: punch logout at 18:00"
-🎉 *Event:* "Birthday: Manojna 2026-02-09"
-✉️ *Instant Message:* "Tell manu..."`;
-
-        await sendWhatsAppMessage(phone, errorText);
-      }
+    if (senderContact) {
+      // Capitalize the first letter so 'manu' becomes 'Manu'
+      senderName = senderContact.name.charAt(0).toUpperCase() + senderContact.name.slice(1);
     }
   }
 
-  res.sendStatus(200);
+  // ---------------------------------------------------------
+  // 2. THE DYNAMIC GREETING (Bypass AI for simple Hellos)
+  // ---------------------------------------------------------
+  if (lowerMsg === "hi" || lowerMsg === "hello" || lowerMsg === "hey") {
+    if (isOwner) {
+      const ownerText = `Hi Viswanath! 👋 I'm Manvi. My AI brain is online! 🧠
+
+You can now talk to me naturally:
+📌 "Remind me at 4 PM to review Onemark Stories"
+🔄 "Set a daily routine to remind dad to take his medicine at 9 AM"
+🎉 "Manu's birthday is on Feb 9th 2026"
+✉️ "Shoot a message to dad and tell him I will be 10 minutes late"`;
+
+      return await sendWhatsAppMessage(senderPhone, ownerText);
+    } else {
+      const guestText = `Hi ${senderName}! 👋 I'm Manvi, Viswanath's personal AI assistant. 🧠
+      
+I help him manage his Second Brain. If you want me to pass a message to him or save a reminder, just let me know!`;
+
+      return await sendWhatsAppMessage(senderPhone, guestText);
+    }
+  }
+
+  // ---------------------------------------------------------
+  // 3. 🧠 WAKE UP THE AI: Let Gemini analyze the message
+  // ---------------------------------------------------------
+  const aiResult = await analyzeMessage(message);
+  const { intent, targetName, time, date, taskOrMessage } = aiResult;
+
+  // ---------------------------------------------------------
+  // 4. ADDRESS BOOK: Find out WHO this message is targeting
+  // ---------------------------------------------------------
+  let targetPhone = process.env.MY_PHONE_NUMBER; 
+  let finalName = "you";
+
+  if (targetName && targetName.toLowerCase() !== "you") {
+    // .ilike() for case-insensitive searching in Supabase
+    const { data: contact } = await supabase
+      .from("contacts")
+      .select("*")
+      .ilike("name", targetName)
+      .single();
+    
+    if (contact) {
+      targetPhone = contact.phone;
+      finalName = contact.name.charAt(0).toUpperCase() + contact.name.slice(1);
+    } else {
+      return await sendWhatsAppMessage(
+        senderPhone, 
+        `I couldn't find "${targetName}" in the address book. Please check the spelling!`
+      );
+    }
+  }
+
+ // ---------------------------------------------------------
+  // 5. DYNAMIC ROUTING (Based on AI's understanding)
+  // ---------------------------------------------------------
+  try {
+    if (intent === "chat") {
+      // Manvi acts like a chatbot and answers their question or tells a joke!
+      await sendWhatsAppMessage(senderPhone, taskOrMessage);
+    }
+    
+    else if (intent === "event") {
+      const { error } = await supabase.from("special_events").insert([
+        { phone: targetPhone, event_type: taskOrMessage, person_name: finalName, event_date: date }
+      ]);
+      if (!error) await sendWhatsAppMessage(senderPhone, `🎉 Got it! I've saved ${finalName}'s ${taskOrMessage} for ${date}.`);
+    } 
+    
+    else if (intent === "routine") {
+      const { error } = await supabase.from("daily_routines").insert([
+        { phone: targetPhone, task_name: taskOrMessage, reminder_time: time }
+      ]);
+      if (!error) await sendWhatsAppMessage(senderPhone, `🔄 Routine set! I'll remind ${finalName} to "${taskOrMessage}" every day at ${time}.`);
+    } 
+    
+    else if (intent === "instant_message") {
+      if (finalName.toLowerCase() === "you") {
+        // A guest is trying to send Viswanath a message
+        await sendWhatsAppMessage(process.env.MY_PHONE_NUMBER, `📬 Forwarded from ${senderName}: ${taskOrMessage}`);
+        await sendWhatsAppMessage(senderPhone, `✅ I've passed your message to Viswanath!`);
+      } else {
+        // Normal instant message to someone else
+        await sendWhatsAppMessage(targetPhone, `✨ Message from ${senderName}: ${taskOrMessage}`);
+        await sendWhatsAppMessage(senderPhone, `✅ Message successfully sent to ${finalName}!`);
+      }
+    } 
+    
+    else if (intent === "reminder") {
+      if (!time) {
+        return await sendWhatsAppMessage(senderPhone, `I understood you want a reminder, but I didn't catch the exact time. Could you specify it?`);
+      }
+      const dbTimestamp = buildReminderDate(time);
+      const { error } = await supabase.from("personal_reminders").insert([
+        { phone: targetPhone, message: taskOrMessage, reminder_time: dbTimestamp, group_name: finalName.toLowerCase() === "you" ? null : finalName }
+      ]);
+
+      if (!error) {
+        const displayTime = new Date(dbTimestamp).toLocaleTimeString("en-US", {
+          timeZone: "Asia/Kolkata", hour: "numeric", minute: "2-digit", hour12: true
+        });
+        await sendWhatsAppMessage(senderPhone, `✅ Reminder set for ${finalName} at ${displayTime}.`);
+      }
+    } 
+    
+    else {
+      await sendWhatsAppMessage(senderPhone, `I'm sorry ${senderName}, my AI didn't quite understand that. Could you rephrase it? 🤖`);
+    }
+  } catch (error) {
+    console.error("Database Routing Error:", error);
+    await sendWhatsAppMessage(senderPhone, `Oops, I ran into a database error trying to save that. 🚨`);
+  }
 });
 
 app.listen(process.env.PORT || 3000, () => {
