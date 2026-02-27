@@ -23,7 +23,7 @@ Done. Manvi's AI parses the intent, stores it securely in PostgreSQL, and pings 
 ## ✨ What Manvi Does
 
 ```
-🤖  AI Powered             Understands messy, natural language using Gemini 1.5 Flash
+🤖  AI Powered             Understands messy, natural language using Gemini 2.0 Flash
 
 🔍  Memory Retrieval       "What is my schedule today?" or "When is dad's birthday?"
                           Instantly queries the database to fetch saved events

@@ -4,9 +4,9 @@ require("dotenv").config();
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
 async function analyzeMessage(userMessage) {
-  // 1. Force the AI into strict JSON mode
+  // 1. Force the AI into strict JSON mode with a LIVING model
   const model = genAI.getGenerativeModel({ 
-    model: "gemini-1.5-flash",
+    model: "gemini-2.0-flash", 
     generationConfig: { responseMimeType: "application/json" }
   });
   
