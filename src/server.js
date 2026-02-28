@@ -106,7 +106,7 @@ app.post("/webhook", async (req, res) => {
   }
 
   // ---------------------------------------------------------
-  // 2. THE DYNAMIC GREETING
+  // 2. THE DYNAMIC GREETING (Does NOT use AI, costs 0 tokens)
   // ---------------------------------------------------------
   if (lowerMsg === "hi" || lowerMsg === "hello" || lowerMsg === "hey") {
     if (isOwner) {
@@ -124,11 +124,14 @@ app.post("/webhook", async (req, res) => {
   const aiResult = await analyzeMessage(message);
   const { intent, targetName, time, date, taskOrMessage, ai_meta } = aiResult;
 
-  // ✨ NEW: Custom responder that appends the AI limit!
+  // ✨ NEW: Custom responder that automatically appends the AI limit tag!
   const respond = async (responseText) => {
-    const finalText = ai_meta ? `${responseText}\n\n_${ai_meta}_` : responseText;
+    const finalText = ai_meta
+      ? `${responseText}\n\n_${ai_meta}_`
+      : responseText;
     return await replyAndLog(senderPhone, senderName, message, finalText);
   };
+
   // ---------------------------------------------------------
   // 4. ADDRESS BOOK
   // ---------------------------------------------------------
@@ -145,10 +148,7 @@ app.post("/webhook", async (req, res) => {
       targetPhone = contact.phone;
       finalName = contact.name.charAt(0).toUpperCase() + contact.name.slice(1);
     } else {
-      return await replyAndLog(
-        senderPhone,
-        senderName,
-        message,
+      return await respond(
         `I couldn't find "${targetName}" in the address book. Please check the spelling!`,
       );
     }
@@ -159,35 +159,61 @@ app.post("/webhook", async (req, res) => {
   // ---------------------------------------------------------
   try {
     if (intent === "chat") {
-      return await replyAndLog(senderPhone, senderName, message, taskOrMessage);
+      return await respond(taskOrMessage);
     }
 
     // ---------------------------------------------------------
-    // 🚦 RATE LIMIT HANDLER
+    // 🚦 RATE LIMIT & ERROR HANDLERS
     // ---------------------------------------------------------
-    if (intent === "error_quota") {
-      return await replyAndLog(senderPhone, senderName, message, `⚠️ *System Alert:* My AI brain is currently rate-limited by Google (Quota Exceeded). I need to rest for a minute before I can process more tasks! ⏳`);
+    if (intent === "api_error") {
+      let readableError = taskOrMessage;
+      const bracketMatch = readableError.match(/\](.*)/);
+      if (bracketMatch && bracketMatch[1]) {
+        readableError = bracketMatch[1].trim();
+      }
+      return await respond(`⚠️ *Google AI Error:*\n${readableError}`);
     }
 
     // ---------------------------------------------------------
-    // 🗑️ DELETE HANDLER (Searches and destroys)
+    // 🗑️ DELETE HANDLER
     // ---------------------------------------------------------
     else if (intent === "delete_task") {
-      if (!isOwner) return await replyAndLog(senderPhone, senderName, message, `🔒 Only Viswanath can delete memories.`);
+      if (!isOwner)
+        return await respond(`🔒 Only Viswanath can delete memories.`);
 
-      // 1. Try deleting from One-Off Reminders
-      const { data: remData } = await supabase.from("personal_reminders").delete().ilike("message", `%${taskOrMessage}%`).select();
-      if (remData && remData.length > 0) return await replyAndLog(senderPhone, senderName, message, `🗑️ Successfully deleted reminder: "${remData[0].message}"`);
+      const { data: remData } = await supabase
+        .from("personal_reminders")
+        .delete()
+        .ilike("message", `%${taskOrMessage}%`)
+        .select();
+      if (remData && remData.length > 0)
+        return await respond(
+          `🗑️ Successfully deleted reminder: "${remData[0].message}"`,
+        );
 
-      // 2. Try deleting from Daily Routines
-      const { data: routData } = await supabase.from("daily_routines").delete().ilike("task_name", `%${taskOrMessage}%`).select();
-      if (routData && routData.length > 0) return await replyAndLog(senderPhone, senderName, message, `🗑️ Successfully deleted routine: "${routData[0].task_name}"`);
+      const { data: routData } = await supabase
+        .from("daily_routines")
+        .delete()
+        .ilike("task_name", `%${taskOrMessage}%`)
+        .select();
+      if (routData && routData.length > 0)
+        return await respond(
+          `🗑️ Successfully deleted routine: "${routData[0].task_name}"`,
+        );
 
-      // 3. Try deleting from Special Events
-      const { data: eventData } = await supabase.from("special_events").delete().ilike("person_name", `%${taskOrMessage}%`).select();
-      if (eventData && eventData.length > 0) return await replyAndLog(senderPhone, senderName, message, `🗑️ Successfully deleted event for: "${eventData[0].person_name}"`);
+      const { data: eventData } = await supabase
+        .from("special_events")
+        .delete()
+        .ilike("person_name", `%${taskOrMessage}%`)
+        .select();
+      if (eventData && eventData.length > 0)
+        return await respond(
+          `🗑️ Successfully deleted event for: "${eventData[0].person_name}"`,
+        );
 
-      return await replyAndLog(senderPhone, senderName, message, `I couldn't find anything matching "${taskOrMessage}" to delete. Try checking your active lists first!`);
+      return await respond(
+        `I couldn't find anything matching "${taskOrMessage}" to delete. Try checking your active lists first!`,
+      );
     }
 
     // --- ADMIN QUERIES ---
@@ -200,10 +226,7 @@ app.post("/webhook", async (req, res) => {
       ].includes(intent)
     ) {
       if (!isOwner) {
-        return await replyAndLog(
-          senderPhone,
-          senderName,
-          message,
+        return await respond(
           `🔒 I'm sorry ${senderName}, but only Viswanath has clearance to access my global memory banks.`,
         );
       }
@@ -220,7 +243,7 @@ app.post("/webhook", async (req, res) => {
               (text += `- ${c.name.charAt(0).toUpperCase() + c.name.slice(1)}\n`),
           );
         else text += "No contacts found.";
-        return await replyAndLog(senderPhone, senderName, message, text);
+        return await respond(text);
       }
 
       if (intent === "query_reminders") {
@@ -247,7 +270,7 @@ app.post("/webhook", async (req, res) => {
             text += `- [${timeString}] ${r.group_name ? r.group_name + ": " : ""}${r.message}\n`;
           });
         } else text += "No active reminders pending! 🌴";
-        return await replyAndLog(senderPhone, senderName, message, text);
+        return await respond(text);
       }
 
       if (intent === "query_routines") {
@@ -262,7 +285,7 @@ app.post("/webhook", async (req, res) => {
               (text += `- Every day at ${r.reminder_time}: ${r.task_name}\n`),
           );
         else text += "No active routines.";
-        return await replyAndLog(senderPhone, senderName, message, text);
+        return await respond(text);
       }
 
       if (intent === "query_events") {
@@ -277,7 +300,7 @@ app.post("/webhook", async (req, res) => {
               (text += `- ${e.event_date}: ${e.person_name}'s ${e.event_type}\n`),
           );
         else text += "No special events saved.";
-        return await replyAndLog(senderPhone, senderName, message, text);
+        return await respond(text);
       }
     }
 
@@ -290,25 +313,16 @@ app.post("/webhook", async (req, res) => {
         .eq("event_type", "birthday")
         .single();
       if (data)
-        return await replyAndLog(
-          senderPhone,
-          senderName,
-          message,
+        return await respond(
           `🎂 ${finalName}'s birthday is saved as ${data.event_date}.`,
         );
       else
-        return await replyAndLog(
-          senderPhone,
-          senderName,
-          message,
+        return await respond(
           `I checked my memory, but I don't have a birthday saved for ${finalName} yet.`,
         );
     } else if (intent === "query_schedule") {
       if (!date)
-        return await replyAndLog(
-          senderPhone,
-          senderName,
-          message,
+        return await respond(
           `Could you specify which day you want to check? (e.g., "What is my schedule for today?")`,
         );
       const { data: events } = await supabase
@@ -347,7 +361,7 @@ app.post("/webhook", async (req, res) => {
       }
       if (!hasItems)
         scheduleText = `Looks like a free day! I don't see any reminders or events scheduled for ${date}. 🌴`;
-      return await replyAndLog(senderPhone, senderName, message, scheduleText);
+      return await respond(scheduleText);
     }
 
     // --- WRITING DATA ---
@@ -363,10 +377,7 @@ app.post("/webhook", async (req, res) => {
           },
         ]);
       if (!error)
-        await replyAndLog(
-          senderPhone,
-          senderName,
-          message,
+        await respond(
           `🎉 Got it! I've saved ${finalName}'s ${taskOrMessage} for ${date}.`,
         );
     } else if (intent === "routine") {
@@ -376,10 +387,7 @@ app.post("/webhook", async (req, res) => {
           { phone: targetPhone, task_name: taskOrMessage, reminder_time: time },
         ]);
       if (!error)
-        await replyAndLog(
-          senderPhone,
-          senderName,
-          message,
+        await respond(
           `🔄 Routine set! I'll remind ${finalName} to "${taskOrMessage}" every day at ${time}.`,
         );
     } else if (intent === "instant_message") {
@@ -388,30 +396,17 @@ app.post("/webhook", async (req, res) => {
           process.env.MY_PHONE_NUMBER,
           `📬 Forwarded from ${senderName}: ${taskOrMessage}`,
         );
-        await replyAndLog(
-          senderPhone,
-          senderName,
-          message,
-          `✅ I've passed your message to Viswanath!`,
-        );
+        await respond(`✅ I've passed your message to Viswanath!`);
       } else {
         await sendWhatsAppMessage(
           targetPhone,
           `✨ Message from ${senderName}: ${taskOrMessage}`,
         );
-        await replyAndLog(
-          senderPhone,
-          senderName,
-          message,
-          `✅ Message successfully sent to ${finalName}!`,
-        );
+        await respond(`✅ Message successfully sent to ${finalName}!`);
       }
     } else if (intent === "reminder") {
       if (!time)
-        return await replyAndLog(
-          senderPhone,
-          senderName,
-          message,
+        return await respond(
           `I understood you want a reminder, but I didn't catch the exact time. Could you specify it?`,
         );
       const dbTimestamp = buildReminderDate(time);
@@ -432,29 +427,16 @@ app.post("/webhook", async (req, res) => {
           minute: "2-digit",
           hour12: true,
         });
-        await replyAndLog(
-          senderPhone,
-          senderName,
-          message,
-          `✅ Reminder set for ${finalName} at ${displayTime}.`,
-        );
+        await respond(`✅ Reminder set for ${finalName} at ${displayTime}.`);
       }
     } else {
-      await replyAndLog(
-        senderPhone,
-        senderName,
-        message,
+      await respond(
         `I'm sorry ${senderName}, my AI didn't quite understand that. Could you rephrase it? 🤖`,
       );
     }
   } catch (error) {
     console.error("Database Routing Error:", error);
-    await replyAndLog(
-      senderPhone,
-      senderName,
-      message,
-      `Oops, I ran into a database error trying to save that. 🚨`,
-    );
+    await respond(`Oops, I ran into a database error trying to save that. 🚨`);
   }
 });
 
