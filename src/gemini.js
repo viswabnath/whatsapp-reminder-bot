@@ -1,15 +1,56 @@
 const { GoogleGenerativeAI } = require("@google/generative-ai");
+const { OpenAI } = require("openai");
+const supabase = require("./supabase"); // We need the DB to check the counter
 require("dotenv").config();
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-async function analyzeMessage(userMessage) {
-  // 1. Force the AI into strict JSON mode with a LIVING model
-  const model = genAI.getGenerativeModel({ 
-    model: "gemini-2.0-flash", 
-    generationConfig: { responseMimeType: "application/json" }
-  });
+const GEMINI_DAILY_LIMIT = 20; // Set your strict beta limit here
+
+// --- HELPER: Get today's date in IST (YYYY-MM-DD) ---
+function getTodayIST() {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" }).format(new Date());
+}
+
+// --- HELPER: Check and Increment Daily Counter ---
+async function trackGeminiUsage() {
+  const today = getTodayIST();
+  let { data } = await supabase.from("api_usage").select("gemini_count").eq("usage_date", today).single();
   
+  if (!data) {
+    await supabase.from("api_usage").insert([{ usage_date: today, gemini_count: 0 }]);
+    data = { gemini_count: 0 };
+  }
+
+  if (data.gemini_count < GEMINI_DAILY_LIMIT) {
+    await supabase.from("api_usage").update({ gemini_count: data.gemini_count + 1 }).eq("usage_date", today);
+    return { allowed: true, remaining: GEMINI_DAILY_LIMIT - (data.gemini_count + 1) };
+  }
+  return { allowed: false, remaining: 0 };
+}
+
+// --- FALLBACK: Route to OpenAI ---
+async function callOpenAIFallback(systemPrompt, userMessage) {
+  console.log("🔄 Routing to OpenAI Fallback...");
+  try {
+    const response = await openai.chat.completions.create({
+      model: "gpt-4o-mini", // Fast, incredibly cheap, great at JSON
+      response_format: { type: "json_object" }, // Forces strict JSON
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userMessage }
+      ]
+    });
+    return JSON.parse(response.choices[0].message.content);
+  } catch (error) {
+    console.error("OpenAI Fallback Error:", error);
+    return { intent: "api_error", targetName: "you", time: null, date: null, taskOrMessage: "Both Gemini and the Fallback AI are currently down." };
+  }
+}
+
+// --- MAIN ROUTER ---
+async function analyzeMessage(userMessage) {
   const currentIST = new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" });
 
   const prompt = `
@@ -67,24 +108,35 @@ async function analyzeMessage(userMessage) {
   Message: "${userMessage}"
   `;
 
+  const usage = await trackGeminiUsage();
+  let finalJSON;
+
+  if (!usage.allowed) {
+    // 🚦 LIMIT REACHED: Route directly to OpenAI
+    finalJSON = await callOpenAIFallback(prompt, userMessage);
+    finalJSON.ai_meta = "🤖 Fallback AI Active";
+    return finalJSON;
+  }
+
+  // 2. We have quota! Try Gemini 2.5
   try {
+    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash", generationConfig: { responseMimeType: "application/json" } });
     const result = await model.generateContent(prompt);
     let text = result.response.text();
     
-    // 2. Aggressively extract ONLY the JSON block (ignoring any polite filler text)
     const jsonMatch = text.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) {
-      throw new Error("No JSON object found in AI response.");
-    }
+    if (!jsonMatch) throw new Error("No JSON found");
     
-    return JSON.parse(jsonMatch[0]);
+   finalJSON = JSON.parse(jsonMatch[0]);
+    finalJSON.ai_meta = `⚡ ${usage.remaining} Gemini requests left`;
+    return finalJSON;
     
   } catch (error) {
-    console.error("Gemini Parsing Error:", error);
-    if (error.message && (error.message.includes("429") || error.message.includes("quota") || error.message.includes("Too Many Requests"))) {
-      return { intent: "error_quota" };
-    }
-    return { intent: "unknown" }; 
+    console.error("Gemini crashed, falling back:", error.message);
+   // 🚦 GEMINI CRASHED: Route to OpenAI as safety net
+    finalJSON = await callOpenAIFallback(prompt, userMessage);
+    finalJSON.ai_meta = "🤖 Fallback AI Active (Gemini Error)";
+    return finalJSON;
   }
 }
 

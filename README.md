@@ -171,6 +171,12 @@ CREATE TABLE interaction_logs (
   bot_response TEXT,
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
+
+-- 6. API Usage Tracker (Limits and Fallbacks)
+CREATE TABLE api_usage (
+  usage_date DATE PRIMARY KEY,
+  gemini_count INT DEFAULT 0
+);
 ```
 
 ---
@@ -202,8 +208,9 @@ ACCESS_TOKEN=your_meta_access_token_here
 SUPABASE_URL=https://[your-project-id].supabase.co
 SUPABASE_KEY=your_supabase_secret_key
 
-# Google AI Studio
+# AI Models & Fallbacks
 GEMINI_API_KEY=your_gemini_api_key_here
+OPENAI_API_KEY=your_openai_secret_key_here
 ```
 
 ### 3 · Run locally

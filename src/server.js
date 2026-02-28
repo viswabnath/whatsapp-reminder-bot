@@ -122,8 +122,13 @@ app.post("/webhook", async (req, res) => {
   // 3. 🧠 WAKE UP THE AI
   // ---------------------------------------------------------
   const aiResult = await analyzeMessage(message);
-  const { intent, targetName, time, date, taskOrMessage } = aiResult;
+  const { intent, targetName, time, date, taskOrMessage, ai_meta } = aiResult;
 
+  // ✨ NEW: Custom responder that appends the AI limit!
+  const respond = async (responseText) => {
+    const finalText = ai_meta ? `${responseText}\n\n_${ai_meta}_` : responseText;
+    return await replyAndLog(senderPhone, senderName, message, finalText);
+  };
   // ---------------------------------------------------------
   // 4. ADDRESS BOOK
   // ---------------------------------------------------------
