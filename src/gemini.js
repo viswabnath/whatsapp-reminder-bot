@@ -3,25 +3,46 @@ const { OpenAI } = require("openai");
 const { getUsage, track, LIMITS } = require("./usage");
 require("dotenv").config();
 
-// 🧠 Primary Brain: Google Gemini Direct (Free, if available)
+// 🧠 Primary Brains: Google Gemini
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-const primaryModel = genAI.getGenerativeModel({
+
+// Tier 1: Gemini 3 Flash Preview
+const gemini3Json = genAI.getGenerativeModel({
+  model: "gemini-3-flash-preview",
+  generationConfig: { responseMimeType: "application/json" },
+});
+const gemini3Text = genAI.getGenerativeModel({
+  model: "gemini-3-flash-preview",
+});
+
+// Tier 2: Gemini 2.5 Flash
+const gemini25Json = genAI.getGenerativeModel({
   model: "gemini-2.5-flash",
   generationConfig: { responseMimeType: "application/json" },
 });
+const gemini25Text = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
 
-// 🧠 Backup Brain: OpenRouter
+// Tier 3: Groq (Llama 3.3 — Lightning Fast & Free)
+const groqAI = new OpenAI({
+  baseURL: "https://api.groq.com/openai/v1",
+  apiKey: process.env.GROQ_API_KEY,
+});
+
+// Tier 4: OpenRouter (Bulletproof Paid Fallback)
 const backupAI = new OpenAI({
   baseURL: "https://openrouter.ai/api/v1",
   apiKey: process.env.OPENROUTER_API_KEY,
 });
 
 /**
- * Main AI Router: Decides between Gemini and OpenRouter
+ * Main AI Router: The 4-Tier Waterfall System
+ *
+ * Returns:
+ *   - Intent requests  (isSummaryRequest=false): parsed JSON object with ai_meta field
+ *   - Summary requests (isSummaryRequest=true):  { text: string, ai_meta: string }
  */
 async function analyzeMessage(userMessage, isSummaryRequest = false) {
   const usageStats = await getUsage();
-
   const currentIST = new Date().toLocaleString("en-US", {
     timeZone: "Asia/Kolkata",
     hour12: false,
@@ -44,7 +65,7 @@ async function analyzeMessage(userMessage, isSummaryRequest = false) {
     "targetName": "you" (Use "you" if the message is meant for Viswanath, "him", "he", or "owner") OR the extracted name,
     "time": "HH:MM:SS" (in 24-hour format if a time is mentioned/calculated. Assume IST timezone.),
     "date": "YYYY-MM-DD" (if a specific date is mentioned/calculated for queries or events),
-    "taskOrMessage": "The cleaned up task/message. For deletions, extract what needs to be deleted. For web_search, extract the optimized search query."
+    "taskOrMessage": "If intent is 'chat', provide your actual helpful/funny response here. For other intents, extract the cleaned task or search query."
   }
 
   Examples:
@@ -62,16 +83,16 @@ async function analyzeMessage(userMessage, isSummaryRequest = false) {
 
   Message: "What are my special events?"
   JSON: {"intent": "query_events", "targetName": "you", "time": null, "date": null, "taskOrMessage": null}
-  
+
   Message: "When is Mom's birthday?"
   JSON: {"intent": "query_birthday", "targetName": "Mom", "time": null, "date": null, "taskOrMessage": null}
 
   Message: "What is my schedule for tomorrow?"
   JSON: {"intent": "query_schedule", "targetName": "you", "time": null, "date": "2026-02-28", "taskOrMessage": null}
-  
+
   Message: "Remind me in 5 minutes to check logs"
   JSON: {"intent": "reminder", "targetName": "you", "time": "14:12:00", "date": null, "taskOrMessage": "check logs"}
-  
+
   Message: "Tell me a joke"
   JSON: {"intent": "chat", "targetName": null, "time": null, "date": null, "taskOrMessage": "Why do programmers prefer dark mode? Because light attracts bugs!"}
 
@@ -85,92 +106,121 @@ async function analyzeMessage(userMessage, isSummaryRequest = false) {
   Message: "${userMessage}"
   `;
 
-  // --- 1. TRY PRIMARY (GEMINI DIRECT) ---
+  const promptToSend = isSummaryRequest
+    ? `Summarize the following search results concisely in plain text. Do not use JSON formatting:\n\n${userMessage}`
+    : systemPrompt + `\nAnalyze: ${userMessage}`;
+
+  // Shared params for OpenAI-compatible APIs (Groq & OpenRouter)
+  const openAIMessages = [
+    {
+      role: "system",
+      content: isSummaryRequest
+        ? "You are Manvi. Summarize the following search results concisely in plain text."
+        : systemPrompt,
+    },
+    { role: "user", content: userMessage },
+  ];
+
+  // ---------------------------------------------------------
+  // TIER 1 & 2: GOOGLE GEMINI
+  // ---------------------------------------------------------
+  let googleResponseText = null;
+  let activeBrain = "Gemini 3 Flash";
+
   if (usageStats.gemini < LIMITS.gemini) {
     try {
-      const promptToSend = isSummaryRequest
-        ? `Summarize the following data concisely: ${userMessage}`
-        : systemPrompt;
-
-      const result = await primaryModel.generateContent(promptToSend);
-      const responseText = result.response.text();
-
-      await track("gemini");
-
-      if (isSummaryRequest) return responseText;
-
-      const cleanJSON = responseText.match(/\{[\s\S]*\}/);
-      if (!cleanJSON) throw new Error("No JSON found in Gemini response");
-
-      const parsed = JSON.parse(cleanJSON[0]);
-      parsed.ai_meta = `⚡ ${LIMITS.gemini - usageStats.gemini - 1} Gemini left`;
-      return parsed;
-    } catch (err) {
-      console.warn(
-        "⚠️ Gemini failed, falling back to OpenRouter...",
-        err.message,
-      );
-    }
-  }
-
-  // --- 2. TRY BACKUP (OPENROUTER PAID TIER) ---
-  if (usageStats.openrouter < LIMITS.openrouter) {
-    try {
-      console.log("🔄 Routing to OpenRouter Fallback...");
-
-      // Setup the API request parameters
-      const requestParams = {
-        model: "openai/gpt-4o-mini",
-        messages: [
-          {
-            role: "system",
-            content: isSummaryRequest
-              ? "You are Manvi. Summarize the following search results concisely in plain text."
-              : systemPrompt,
-          },
-          { role: "user", content: userMessage },
-        ],
-      };
-
-      // ONLY force JSON mode if we are NOT doing a summary
-      if (!isSummaryRequest) {
-        requestParams.response_format = { type: "json_object" };
+      const activeModel = isSummaryRequest ? gemini3Text : gemini3Json;
+      const result = await activeModel.generateContent(promptToSend);
+      googleResponseText = result.response.text();
+    } catch (err3) {
+      console.warn("⚠️ Gemini 3 failed. Cascading to Gemini 2.5...");
+      try {
+        const activeModel = isSummaryRequest ? gemini25Text : gemini25Json;
+        const result = await activeModel.generateContent(promptToSend);
+        googleResponseText = result.response.text();
+        activeBrain = "Gemini 2.5 Flash";
+      } catch (err25) {
+        console.warn("⚠️ All Google models failed. Cascading to Groq...");
       }
-
-      const response = await backupAI.chat.completions.create(requestParams);
-
-      await track("openrouter");
-      const backupText = response.choices[0].message.content;
-
-      // If it was a summary, just return the plain text!
-      if (isSummaryRequest) return backupText;
-
-      // Otherwise, parse the JSON for intents
-      const jsonMatch = backupText.match(/\{[\s\S]*\}/);
-      if (!jsonMatch) throw new Error("No JSON found in OpenRouter response");
-
-      const parsedBackup = JSON.parse(jsonMatch[0]);
-      parsedBackup.ai_meta = `🤖 OpenRouter Premium Active`;
-      return parsedBackup;
-    } catch (backupErr) {
-      console.error("OpenRouter Fallback Error:", backupErr);
-      return {
-        intent: "api_error",
-        targetName: "you",
-        time: null,
-        date: null,
-        taskOrMessage: "All AI models are offline or limits reached.",
-      };
     }
   }
 
-  return {
-    intent: "api_error",
-    targetName: "you",
-    time: null,
-    date: null,
-    taskOrMessage: "Daily AI limits reached. Check /limit.",
-  };
+  if (googleResponseText) {
+    await track("gemini");
+    const remaining = LIMITS.gemini - (usageStats.gemini + 1);
+    const ai_meta = `⚡ ${activeBrain} (${remaining} left)`;
+
+    if (isSummaryRequest) return { text: googleResponseText, ai_meta };
+
+    const cleanJSON = googleResponseText.match(/\{[\s\S]*\}/);
+    if (!cleanJSON) throw new Error("No JSON found in Google response");
+
+    const parsed = JSON.parse(cleanJSON[0]);
+    parsed.ai_meta = ai_meta;
+    return parsed;
+  }
+
+  // ---------------------------------------------------------
+  // TIER 3: GROQ (FREE — LLAMA 3.3)
+  // ---------------------------------------------------------
+  try {
+    console.log("⚡ Routing to Groq Free Tier...");
+    const response = await groqAI.chat.completions.create({
+      model: "llama-3.3-70b-versatile",
+      messages: openAIMessages,
+      ...(!isSummaryRequest && { response_format: { type: "json_object" } }),
+    });
+
+    await track("groq");
+    const groqText = response.choices[0].message.content;
+    const remaining = LIMITS.groq - (usageStats.groq + 1);
+    const ai_meta = `🚀 Groq Fast (Llama 3.3 — ${remaining} left)`;
+
+    if (isSummaryRequest) return { text: groqText, ai_meta };
+
+    const jsonMatch = groqText.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) throw new Error("No JSON found in Groq response");
+
+    const parsed = JSON.parse(jsonMatch[0]);
+    parsed.ai_meta = ai_meta;
+    return parsed;
+  } catch (groqErr) {
+    console.warn("⚠️ Groq failed. Cascading to OpenRouter...", groqErr.message);
+  }
+
+  // ---------------------------------------------------------
+  // TIER 4: OPENROUTER (PAID — GPT-4o-mini)
+  // ---------------------------------------------------------
+  try {
+    console.log("🤖 Routing to OpenRouter Premium...");
+    const response = await backupAI.chat.completions.create({
+      model: "openai/gpt-4o-mini",
+      messages: openAIMessages,
+      ...(!isSummaryRequest && { response_format: { type: "json_object" } }),
+    });
+
+    await track("openrouter");
+    const orText = response.choices[0].message.content;
+    const ai_meta = `🤖 OpenRouter (GPT-4o-mini)`;
+
+    if (isSummaryRequest) return { text: orText, ai_meta };
+
+    const jsonMatch = orText.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) throw new Error("No JSON found in OpenRouter response");
+
+    const parsed = JSON.parse(jsonMatch[0]);
+    parsed.ai_meta = ai_meta;
+    return parsed;
+  } catch (backupErr) {
+    console.error("OpenRouter Fallback Error:", backupErr);
+    return {
+      intent: "api_error",
+      targetName: "you",
+      time: null,
+      date: null,
+      taskOrMessage: "All AI models are offline or limits reached.",
+    };
+  }
 }
 
 module.exports = { analyzeMessage };

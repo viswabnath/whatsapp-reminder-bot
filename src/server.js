@@ -36,7 +36,19 @@ function buildReminderDate(timeString) {
 }
 
 // ---------------------------------------------------------
-// HELPER 2: Send WhatsApp Message AND Log to Database
+// HELPER 2: Format HH:MM or HH:MM:SS → "9:00 AM" display string
+// Works for both AI-extracted time strings and Postgres TIME values
+// ---------------------------------------------------------
+function formatTimeDisplay(rawTime) {
+  return new Date(`1970-01-01T${rawTime}`).toLocaleTimeString("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  });
+}
+
+// ---------------------------------------------------------
+// HELPER 3: Send WhatsApp Message AND Log to Database
 // ---------------------------------------------------------
 async function replyAndLog(phone, name, incomingMsg, botReply) {
   await sendWhatsAppMessage(phone, botReply);
@@ -101,7 +113,7 @@ app.post("/webhook", async (req, res) => {
   // ---------------------------------------------------------
   if (lowerMsg === "/limit") {
     const u = await getUsage();
-    const statusMsg = `📊 *Manvi System Limits*\n\n🧠 *AI BRAINS*\n• Gemini: ${u.gemini} / ${LIMITS.gemini}\n• OpenRouter: ${u.openrouter} / ${LIMITS.openrouter}\n\n🔍 *SEARCH ENGINES*\n• Tavily (Monthly): ${u.tavily} / ${LIMITS.tavily}\n• Serper (Lifetime): ${u.serper} / ${LIMITS.serper}\n\n*Status:* All systems operational ✅`;
+    const statusMsg = `📊 *Manvi System Limits*\n\n🧠 *AI BRAINS*\n• Gemini: ${u.gemini} / ${LIMITS.gemini}\n• Groq: ${u.groq} / ${LIMITS.groq}\n• OpenRouter: ${u.openrouter} / ${LIMITS.openrouter}\n\n🔍 *SEARCH ENGINES*\n• Tavily (Monthly): ${u.tavily} / ${LIMITS.tavily}\n• Serper (Lifetime): ${u.serper} / ${LIMITS.serper}\n\n*Status:* All systems operational ✅`;
     return await replyAndLog(senderPhone, senderName, message, statusMsg);
   }
 
@@ -124,20 +136,35 @@ app.post("/webhook", async (req, res) => {
   const aiResult = await analyzeMessage(message);
   const { intent, targetName, time, date, taskOrMessage, ai_meta } = aiResult;
 
-  const respond = async (responseText) => {
-    const finalText = ai_meta
-      ? `${responseText}\n\n_${ai_meta}_`
-      : responseText;
+  // respond() appends ai_meta automatically.
+  // Pass overrideAiMeta to use a different model label (e.g. for web search summaries).
+  const respond = async (responseText, overrideAiMeta) => {
+    const meta = overrideAiMeta !== undefined ? overrideAiMeta : ai_meta;
+    const finalText = meta ? `${responseText}\n\n_${meta}_` : responseText;
     return await replyAndLog(senderPhone, senderName, message, finalText);
   };
 
   // ---------------------------------------------------------
   // 5. ADDRESS BOOK
+  // FIX: Query-only intents (birthday, schedule, events) don't need a phone number.
+  // Skip address book for these so names not in contacts still work.
   // ---------------------------------------------------------
+  const queryOnlyIntents = [
+    "query_birthday",
+    "query_schedule",
+    "query_events",
+    "query_reminders",
+    "query_routines",
+    "query_contacts",
+  ];
   let targetPhone = process.env.MY_PHONE_NUMBER;
   let finalName = "you";
 
-  if (targetName && targetName.toLowerCase() !== "you") {
+  if (
+    targetName &&
+    targetName.toLowerCase() !== "you" &&
+    !queryOnlyIntents.includes(intent)
+  ) {
     const { data: contact } = await supabase
       .from("contacts")
       .select("*")
@@ -151,6 +178,13 @@ app.post("/webhook", async (req, res) => {
         `I couldn't find "${targetName}" in the address book. Please check the spelling!`,
       );
     }
+  } else if (
+    targetName &&
+    targetName.toLowerCase() !== "you" &&
+    queryOnlyIntents.includes(intent)
+  ) {
+    // For query intents, just use the name directly — no phone lookup needed
+    finalName = targetName.charAt(0).toUpperCase() + targetName.slice(1);
   }
 
   // ---------------------------------------------------------
@@ -166,12 +200,11 @@ app.post("/webhook", async (req, res) => {
       const bracketMatch = readableError.match(/\](.*)/);
       if (bracketMatch && bracketMatch[1])
         readableError = bracketMatch[1].trim();
-      return await respond(`⚠️ *Google AI Error:*\n${readableError}`);
+      return await respond(`⚠️ *AI Error:*\n${readableError}`);
     }
 
     // --- 🌐 WEB SEARCH ---
     else if (intent === "web_search") {
-      await respond("🔍 Searching the web for you, one moment...");
       const searchResults = await searchWeb(taskOrMessage);
 
       if (!searchResults)
@@ -188,9 +221,10 @@ app.post("/webhook", async (req, res) => {
         Mention facts clearly without complex markdown.
       `;
 
-      const summaryText = await analyzeMessage(summaryPrompt, true);
+      const summaryResult = await analyzeMessage(summaryPrompt, true);
       return await respond(
-        `🌐 *Search Results (${searchResults.source})*\n\n${summaryText}`,
+        `🌐 *Search Results (${searchResults.source})*\n\n${summaryResult.text}`,
+        summaryResult.ai_meta,
       );
     }
 
@@ -297,9 +331,10 @@ app.post("/webhook", async (req, res) => {
           .eq("is_active", true);
         let text = "🔄 *Active Daily Routines:*\n\n";
         if (data && data.length > 0)
+          // FIX: Format routine time as "9:00 AM" instead of raw "09:00:00"
           data.forEach(
             (r) =>
-              (text += `- Every day at ${r.reminder_time}: ${r.task_name}\n`),
+              (text += `- Every day at ${formatTimeDisplay(r.reminder_time)}: ${r.task_name}\n`),
           );
         else text += "No active routines.";
         return await respond(text);
@@ -383,19 +418,22 @@ app.post("/webhook", async (req, res) => {
 
     // --- WRITING DATA ---
     else if (intent === "event") {
-      const { error } = await supabase
-        .from("special_events")
-        .insert([
-          {
-            phone: targetPhone,
-            event_type: taskOrMessage,
-            person_name: finalName,
-            event_date: date,
-          },
-        ]);
+      const { error } = await supabase.from("special_events").insert([
+        {
+          phone: targetPhone,
+          event_type: taskOrMessage,
+          person_name: finalName,
+          event_date: date,
+        },
+      ]);
       if (!error)
         await respond(
           `🎉 Got it! I've saved ${finalName}'s ${taskOrMessage} for ${date}.`,
+        );
+      // FIX: Inform user if save failed silently
+      else
+        await respond(
+          `⚠️ Something went wrong saving that event. Please try again.`,
         );
     } else if (intent === "routine") {
       const { error } = await supabase
@@ -403,9 +441,14 @@ app.post("/webhook", async (req, res) => {
         .insert([
           { phone: targetPhone, task_name: taskOrMessage, reminder_time: time },
         ]);
+      // FIX: Format time display + handle insert error
       if (!error)
         await respond(
-          `🔄 Routine set! I'll remind ${finalName} to "${taskOrMessage}" every day at ${time}.`,
+          `🔄 Routine set! I'll remind ${finalName} to "${taskOrMessage}" every day at ${formatTimeDisplay(time)}.`,
+        );
+      else
+        await respond(
+          `⚠️ Something went wrong saving that routine. Please try again.`,
         );
     } else if (intent === "instant_message") {
       if (finalName.toLowerCase() === "you") {
@@ -427,24 +470,22 @@ app.post("/webhook", async (req, res) => {
           `I understood you want a reminder, but I didn't catch the exact time. Could you specify it?`,
         );
       const dbTimestamp = buildReminderDate(time);
-      const { error } = await supabase
-        .from("personal_reminders")
-        .insert([
-          {
-            phone: targetPhone,
-            message: taskOrMessage,
-            reminder_time: dbTimestamp,
-            group_name: finalName.toLowerCase() === "you" ? null : finalName,
-          },
-        ]);
+      const { error } = await supabase.from("personal_reminders").insert([
+        {
+          phone: targetPhone,
+          message: taskOrMessage,
+          reminder_time: dbTimestamp,
+          group_name: finalName.toLowerCase() === "you" ? null : finalName,
+        },
+      ]);
       if (!error) {
-        const displayTime = new Date(dbTimestamp).toLocaleTimeString("en-US", {
-          timeZone: "Asia/Kolkata",
-          hour: "numeric",
-          minute: "2-digit",
-          hour12: true,
-        });
-        await respond(`✅ Reminder set for ${finalName} at ${displayTime}.`);
+        await respond(
+          `✅ Reminder set for ${finalName} at ${formatTimeDisplay(time)}.`,
+        );
+      } else {
+        await respond(
+          `⚠️ Something went wrong saving that reminder. Please try again.`,
+        );
       }
     } else {
       await respond(

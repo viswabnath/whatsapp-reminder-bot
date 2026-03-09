@@ -7,107 +7,128 @@ This document helps AI assistants (Claude, GPT, Cursor) understand the Manvi cod
 ## Architecture Logic
 
 1. **Request Flow**: `server.js` (Webhook) → `gemini.js` (Intent Analysis) → `server.js` (Execution/Database) → `sendMessage.js`
-2. **AI Redundancy**: `gemini.js` attempts `gemini-2.0-flash` natively first. If it fails or hits the `api_usage` daily limit in Supabase, it falls back to OpenRouter.
-3. **Search Redundancy**: `search.js` attempts Tavily first (monthly quota). If it fails or quota is exhausted, it falls back to Serper (lifetime quota).
-4. **Usage Gating**: `usage.js` is checked before every AI and search API call to prevent quota overages. It reads and writes to the `api_usage` table via the `increment_api_usage` Supabase RPC.
-5. **Timezone**: The entire system operates on `Asia/Kolkata` (IST). All database timestamps, time comparisons, and cron expressions are relative to IST.
+2. **AI Waterfall (4-Tier)**:
+   - **Tier 1**: `gemini-3-flash-preview` — attempted first if `gemini_count < 40`
+   - **Tier 2**: `gemini-2.5-flash` — catches Tier 1 errors silently
+   - **Tier 3**: Groq `llama-3.3-70b-versatile` — free fallback if all Google models fail
+   - **Tier 4**: OpenRouter `openai/gpt-4o-mini` — paid last resort
+   - Tiers 1 & 2 share the same `gemini_count` (combined cap: 40/day). Tier 3 has its own `groq_count`. Tier 4 has `openrouter_count`.
+3. **Search Redundancy**: `search.js` attempts Tavily first (monthly quota). Falls back to Serper (lifetime quota).
+4. **Usage Gating**: `usage.js` checks `gemini_count < LIMITS.gemini` before attempting Google tiers. `ensureRowExists()` self-heals missing daily rows automatically.
+5. **Timezone**: The entire system operates on `Asia/Kolkata` (IST). All timestamps, time comparisons, and cron expressions are IST-relative.
 
 ---
 
 ## File Responsibilities
 
-| File             | Responsibility                                                                         |
-| :--------------- | :------------------------------------------------------------------------------------- |
-| `server.js`      | Webhook entry point, Caller ID verification, intent routing, database execution        |
-| `gemini.js`      | Natural language parsing, prompt engineering, Gemini → OpenRouter fallback logic       |
-| `search.js`      | Web search orchestration — Tavily primary, Serper fallback                             |
-| `usage.js`       | Reads/writes `api_usage` table via RPC; enforces daily/monthly limits before API calls |
-| `scheduler.js`   | node-cron job runner for reminders, routines, and special events (IST-aware)           |
-| `supabase.js`    | Supabase client initialization and database connection                                 |
-| `sendMessage.js` | Meta WhatsApp Cloud API wrapper for outbound messages                                  |
+| File | Responsibility |
+| :--- | :--- |
+| `server.js` | Webhook entry point, Caller ID verification, intent routing, database execution |
+| `gemini.js` | 4-tier waterfall — Gemini 3 → Gemini 2.5 → Groq → GPT-4o-mini; prompt engineering and JSON parsing |
+| `search.js` | Web search orchestration — Tavily primary, Serper fallback |
+| `usage.js` | Self-healing daily row creation; reads/writes `api_usage`; enforces limits before API calls |
+| `scheduler.js` | node-cron job runner for reminders, routines, and special events (IST-aware) |
+| `supabase.js` | Supabase client initialization and database connection |
+| `sendMessage.js` | Meta WhatsApp Cloud API wrapper for outbound messages |
 
 ---
 
 ## Scheduler Logic (`scheduler.js`)
 
-All IST time operations use `Intl.DateTimeFormat` with `timeZone: "Asia/Kolkata"`. Never use raw `new Date()` without IST conversion in this file.
+All IST time operations use `Intl.DateTimeFormat` with `timeZone: "Asia/Kolkata"`.
 
 ### One-Off Reminders
-
 - **Cron**: `* * * * *` (every minute)
-- Fetches all rows from `personal_reminders` where `status = 'pending'`
-- Uses `.lte("reminder_time", now)` — compares a full ISO 8601 UTC timestamp against the stored `TIMESTAMPTZ` column. **This is NOT HH:mm matching.** The `buildReminderDate()` helper in `server.js` converts the AI-extracted `HH:MM:SS` into a proper `+05:30` ISO timestamp before inserting.
-- On match: sends the WhatsApp message, then updates `status` to `'completed'`
+- Fetches `personal_reminders` where `status = 'pending'`
+- Uses `.lte("reminder_time", now)` — ISO 8601 UTC timestamp comparison against `TIMESTAMPTZ`. **Not HH:mm string matching.**
+- `buildReminderDate()` in `server.js` converts AI-extracted `HH:MM:SS` to a `+05:30` ISO timestamp before insert
+- On match: sends message, updates `status` to `'completed'`
 
 ### Daily Routines
-
 - **Cron**: `* * * * *` (every minute)
-- Uses `Intl.DateTimeFormat("en-GB", { hour12: false })` to get the current IST time as `HH:mm`
-- Fetches all rows from `daily_routines` where `is_active = true`
-- Matches using `.like("reminder_time", \`${timeStr}%\`)`— exact`HH:mm` string prefix match
-- `reminder_time` **must** be stored as `HH:mm` 24-hour format (e.g., `09:00`, not `9:00 AM`)
-- Fires every day at the matching minute with no date gating
+- Gets current IST time as `HH:mm` using `Intl.DateTimeFormat("en-GB", { hour12: false })`
+- Matches `daily_routines` using `.like("reminder_time", \`${timeStr}%\`)` — exact `HH:mm` string prefix
+- `reminder_time` **must** be stored as `HH:mm` 24-hour format (e.g., `09:00`)
 
 ### Special Events — Double-Lock Alert
-
 - **Cron**: `30 8 * * *` (08:30 AM IST daily)
-- Fetches all rows from `special_events`
-- Runs two independent checks per event in the same job:
-  - **Condition 1 (Day-Of)**: If `event_date` month/day matches **today's** IST date → sends celebratory alert
-  - **Condition 2 (Advance Warning)**: If `event_date` month/day matches **tomorrow's** IST date → sends "plan ahead" alert
-- Tomorrow is calculated using `tomorrowDate.setDate(tomorrowDate.getDate() + 1)` — note this uses UTC date, which could be off by 1 near midnight IST. Take care if modifying this logic.
+- Two checks per event in the same job:
+  - **Day-Of**: event month/day matches today → celebratory alert
+  - **Advance Warning**: event month/day matches tomorrow → "plan ahead" alert
+- Tomorrow calculated via `tomorrowDate.setDate(tomorrowDate.getDate() + 1)` in UTC — can be off by 1 near midnight IST
+
+---
+
+## `analyzeMessage()` Return Contract
+
+This is critical — both callers (`server.js`) must handle the return correctly.
+
+| Call type | Returns |
+| :--- | :--- |
+| `analyzeMessage(msg)` | JSON object with `intent`, `targetName`, `time`, `date`, `taskOrMessage`, `ai_meta` |
+| `analyzeMessage(prompt, true)` | `{ text: string, ai_meta: string }` — **never a plain string** |
+
+`server.js` uses `summaryResult.text` and passes `summaryResult.ai_meta` as `overrideAiMeta` to `respond()`.
+
+---
+
+## `respond()` in `server.js`
+
+```js
+const respond = async (responseText, overrideAiMeta) => {
+  const meta = overrideAiMeta !== undefined ? overrideAiMeta : ai_meta;
+  const finalText = meta ? `${responseText}\n\n_${meta}_` : responseText;
+  return await replyAndLog(senderPhone, senderName, message, finalText);
+};
+```
+
+- `ai_meta` is appended **only inside `respond()`** — never manually concatenate it in the call site
+- Pass `overrideAiMeta` when the responding model differs from the intent-parsing model (e.g., web search)
+
+---
+
+## Usage Tracking (`usage.js`)
+
+- `ensureRowExists()` is called before every `getUsage()` and `track()` — inserts today's row if missing. No RPC needed.
+- `track(service)` does SELECT then UPDATE — not atomic. Fine for single-user personal use.
+- Alert thresholds fire WhatsApp messages to owner at 50, 10, and 0 remaining for `serper` and `tavily`.
+- `groq_count` column must exist in `api_usage` — added in latest schema.
 
 ---
 
 ## Database Schema (Supabase)
 
-- `personal_reminders` — One-off tasks (`reminder_time` as `TIMESTAMPTZ`, `status` as `pending`/`completed`)
-- `daily_routines` — Recurring tasks (`reminder_time` as `TIME` stored in `HH:mm` 24-hour format, `is_active` boolean)
-- `special_events` — Yearly dates like birthdays and anniversaries (`event_date` as `DATE`)
-- `contacts` — Address book for multi-user message dispatch
-- `interaction_logs` — Stealth logger for all messages and bot responses
-- `api_usage` — Tracks daily counts for `gemini_count`, `openrouter_count`, `tavily_count`, `serper_count` per `usage_date`
-
-### Required Supabase RPC
-
-`usage.js` relies on a Postgres function to safely increment API usage counts. Run this in your Supabase SQL Editor:
-
-```sql
-CREATE OR REPLACE FUNCTION increment_api_usage(target_date DATE, column_name TEXT)
-RETURNS void AS $$
-BEGIN
-  INSERT INTO api_usage (usage_date)
-  VALUES (target_date)
-  ON CONFLICT (usage_date) DO NOTHING;
-
-  EXECUTE format(
-    'UPDATE api_usage SET %I = %I + 1 WHERE usage_date = $1',
-    column_name, column_name
-  ) USING target_date;
-END;
-$$ LANGUAGE plpgsql;
-```
+- `personal_reminders` — `reminder_time` as `TIMESTAMPTZ`, `status` as `pending`/`completed`
+- `daily_routines` — `reminder_time` as `TIME` in `HH:mm`, `is_active` boolean
+- `special_events` — `event_date` as `DATE`
+- `contacts` — address book
+- `interaction_logs` — stealth logger
+- `api_usage` — daily counts: `gemini_count`, `groq_count`, `openrouter_count`, `tavily_count`, `serper_count`. Rows auto-created by `ensureRowExists()`.
 
 ---
 
 ## API Quotas & Fallback Thresholds
 
-| Service          | Quota              | Type             | Fallback Trigger                                                     |
-| :--------------- | :----------------- | :--------------- | :------------------------------------------------------------------- |
-| Gemini 2.0 Flash | 1,500 req/day      | Daily            | Falls back to OpenRouter                                             |
-| OpenRouter       | 50 req/day         | Daily safety cap | Last resort — no further fallback                                    |
-| Tavily           | 1,000 req/month    | Monthly          | Falls back to Serper; Manvi auto-alerts owner at 50, 10, 0 remaining |
-| Serper           | 2,500 req/lifetime | Lifetime         | No fallback — alerts owner at 50, 10, 0 remaining                    |
+| Service | Quota | Type | Notes |
+| :--- | :--- | :--- | :--- |
+| Gemini 3 Flash Preview | ~20 req/day | Daily (free) | Tier 1; errors cascade to Tier 2 |
+| Gemini 2.5 Flash | ~20 req/day | Daily (free) | Tier 2; shares `gemini_count` cap of 40 |
+| Groq Llama 3.3 70b | 500 req/day | Daily safety cap (free) | Tier 3; tracked via `groq_count` |
+| OpenRouter GPT-4o-mini | 50 req/day | Daily safety cap (paid ~$5) | Tier 4; last resort |
+| Tavily | 1,000 req/month | Monthly (free) | Auto-alerts at 50, 10, 0 |
+| Serper | 2,500 req/lifetime | Lifetime (free) | Auto-alerts at 50, 10, 0 |
 
 ---
 
 ## Key Constraints
 
-- **No LaTeX**: Never use LaTeX formatting in WhatsApp responses — WhatsApp doesn't render it.
-- **Keep responses short**: WhatsApp users prefer concise, actionable messages. Avoid long prose.
-- **Always check `usage.js`** before calling any AI or search API to prevent quota overages.
-- **IST everywhere**: Never assume UTC. All time parsing, cron expressions, and database writes must use `Asia/Kolkata`. Use `Intl.DateTimeFormat("en-GB", { hour12: false })` for reliable `HH:mm` 24-hour output.
-- **Reminder vs Routine time storage**: `personal_reminders.reminder_time` is a full `TIMESTAMPTZ`. `daily_routines.reminder_time` is `HH:mm` plain time string. These use different matching strategies — do not conflate them.
-- **`increment_api_usage` RPC must exist**: `usage.js` calls this Supabase function for every API track. If it's missing, all API tracking will silently fail.
-- **Caller ID gating**: Admin-only commands (global lists, contacts, all reminders) are locked to `MY_PHONE_NUMBER`. Guests receive a rejection message.
-- **No hardcoded secrets**: All API keys and phone numbers must come from `.env` — never inline.
+- **No LaTeX**: Never use LaTeX in WhatsApp responses.
+- **Keep responses short**: WhatsApp users prefer concise messages.
+- **Always check `usage.js`** before AI/search API calls.
+- **IST everywhere**: Use `Asia/Kolkata`. Use `Intl.DateTimeFormat("en-GB", { hour12: false })` for `HH:mm`.
+- **Reminder vs Routine time storage**: `personal_reminders.reminder_time` is `TIMESTAMPTZ`. `daily_routines.reminder_time` is plain `HH:mm`. Different matching — do not conflate.
+- **`respond()` owns `ai_meta` appending**: Never manually append `ai_meta` at call sites.
+- **Summary requests return `{ text, ai_meta }`**: Never treat the return as a plain string.
+- **`track("groq")` must be called** after every successful Groq response — easy to forget when adding new tiers.
+- **Caller ID gating**: Admin commands locked to `MY_PHONE_NUMBER`.
+- **No hardcoded secrets**: Everything from `.env`.
