@@ -3,6 +3,8 @@ require("dotenv").config();
 const supabase = require("./supabase");
 const sendWhatsAppMessage = require("./sendMessage");
 const { analyzeMessage } = require("./gemini");
+const { searchWeb } = require("./search");
+const { getUsage, LIMITS } = require("./usage");
 require("./scheduler"); // ⏰ Starts the Cron Job!
 
 const app = express();
@@ -37,10 +39,7 @@ function buildReminderDate(timeString) {
 // HELPER 2: Send WhatsApp Message AND Log to Database
 // ---------------------------------------------------------
 async function replyAndLog(phone, name, incomingMsg, botReply) {
-  // 1. Send the actual WhatsApp message
   await sendWhatsAppMessage(phone, botReply);
-
-  // 2. Silently log both sides of the conversation
   await supabase.from("interaction_logs").insert([
     {
       sender_name: name,
@@ -51,18 +50,12 @@ async function replyAndLog(phone, name, incomingMsg, botReply) {
   ]);
 }
 
-// ---------------------------------------------------------
-// HEALTH CHECK (Keeps Render Awake)
-// ---------------------------------------------------------
-app.get("/", (req, res) => {
-  res.status(200).send("Manvi is awake! 🧠");
-});
+app.get("/", (req, res) => res.status(200).send("Manvi is awake! 🧠"));
 
 app.get("/webhook", (req, res) => {
   const mode = req.query["hub.mode"];
   const token = req.query["hub.verify_token"];
   const challenge = req.query["hub.challenge"];
-
   if (mode && token === process.env.VERIFY_TOKEN) {
     res.status(200).send(challenge);
   } else {
@@ -75,7 +68,6 @@ app.post("/webhook", async (req, res) => {
 
   const body = req.body;
   const messageData = body.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
-
   if (!messageData?.text?.body) return;
 
   const message = messageData.text.body;
@@ -83,7 +75,7 @@ app.post("/webhook", async (req, res) => {
   const lowerMsg = message.toLowerCase().trim();
 
   // ---------------------------------------------------------
-  // 1. CALLER ID: Identify who is texting Manvi
+  // 1. CALLER ID
   // ---------------------------------------------------------
   let senderName = "Guest";
   let isOwner = false;
@@ -97,7 +89,6 @@ app.post("/webhook", async (req, res) => {
       .select("name")
       .eq("phone", senderPhone)
       .single();
-
     if (senderContact) {
       senderName =
         senderContact.name.charAt(0).toUpperCase() +
@@ -106,25 +97,33 @@ app.post("/webhook", async (req, res) => {
   }
 
   // ---------------------------------------------------------
-  // 2. THE DYNAMIC GREETING (Does NOT use AI, costs 0 tokens)
+  // 2. STATUS DASHBOARD (/limit)
+  // ---------------------------------------------------------
+  if (lowerMsg === "/limit") {
+    const u = await getUsage();
+    const statusMsg = `📊 *Manvi System Limits*\n\n🧠 *AI BRAINS*\n• Gemini: ${u.gemini} / ${LIMITS.gemini}\n• OpenRouter: ${u.openrouter} / ${LIMITS.openrouter}\n\n🔍 *SEARCH ENGINES*\n• Tavily (Monthly): ${u.tavily} / ${LIMITS.tavily}\n• Serper (Lifetime): ${u.serper} / ${LIMITS.serper}\n\n*Status:* All systems operational ✅`;
+    return await replyAndLog(senderPhone, senderName, message, statusMsg);
+  }
+
+  // ---------------------------------------------------------
+  // 3. THE DYNAMIC GREETING
   // ---------------------------------------------------------
   if (lowerMsg === "hi" || lowerMsg === "hello" || lowerMsg === "hey") {
     if (isOwner) {
-      const ownerText = `Hi Viswanath! 👋 I'm Manvi. My AI brain is online! 🧠\n\nYou can now talk to me naturally:\n📌 "Remind me at 4 PM to review Onemark Stories"\n🔄 "Set a daily routine to remind dad to take his medicine at 9 AM"\n🎉 "Manu's birthday is on Feb 9th 2026"\n✉️ "Shoot a message to dad and tell him I will be 10 minutes late"`;
+      const ownerText = `Hi Viswanath! 👋 I'm Manvi. My AI brain is online! 🧠\n\nYou can now talk to me naturally:\n📌 "Remind me at 4 PM..."\n🔄 "Set a daily routine..."\n🎉 "Manu's birthday is on..."\n🌐 "Who won the recent F1?"`;
       return await replyAndLog(senderPhone, senderName, message, ownerText);
     } else {
-      const guestText = `Hi ${senderName}! 👋 I'm Manvi, Viswanath's personal AI assistant. 🧠\n\nI help him manage his Second Brain. If you want me to pass a message to him or save a reminder, just let me know!`;
+      const guestText = `Hi ${senderName}! 👋 I'm Manvi, Viswanath's personal AI assistant. 🧠`;
       return await replyAndLog(senderPhone, senderName, message, guestText);
     }
   }
 
   // ---------------------------------------------------------
-  // 3. 🧠 WAKE UP THE AI
+  // 4. 🧠 WAKE UP THE AI
   // ---------------------------------------------------------
   const aiResult = await analyzeMessage(message);
   const { intent, targetName, time, date, taskOrMessage, ai_meta } = aiResult;
 
-  // ✨ NEW: Custom responder that automatically appends the AI limit tag!
   const respond = async (responseText) => {
     const finalText = ai_meta
       ? `${responseText}\n\n_${ai_meta}_`
@@ -133,7 +132,7 @@ app.post("/webhook", async (req, res) => {
   };
 
   // ---------------------------------------------------------
-  // 4. ADDRESS BOOK
+  // 5. ADDRESS BOOK
   // ---------------------------------------------------------
   let targetPhone = process.env.MY_PHONE_NUMBER;
   let finalName = "you";
@@ -155,28 +154,47 @@ app.post("/webhook", async (req, res) => {
   }
 
   // ---------------------------------------------------------
-  // 5. DYNAMIC ROUTING
+  // 6. DYNAMIC ROUTING
   // ---------------------------------------------------------
   try {
     if (intent === "chat") {
       return await respond(taskOrMessage);
     }
 
-    // ---------------------------------------------------------
-    // 🚦 RATE LIMIT & ERROR HANDLERS
-    // ---------------------------------------------------------
     if (intent === "api_error") {
       let readableError = taskOrMessage;
       const bracketMatch = readableError.match(/\](.*)/);
-      if (bracketMatch && bracketMatch[1]) {
+      if (bracketMatch && bracketMatch[1])
         readableError = bracketMatch[1].trim();
-      }
       return await respond(`⚠️ *Google AI Error:*\n${readableError}`);
     }
 
-    // ---------------------------------------------------------
-    // 🗑️ DELETE HANDLER
-    // ---------------------------------------------------------
+    // --- 🌐 WEB SEARCH ---
+    else if (intent === "web_search") {
+      await respond("🔍 Searching the web for you, one moment...");
+      const searchResults = await searchWeb(taskOrMessage);
+
+      if (!searchResults)
+        return await respond(
+          "I tried searching the web, but my search tools are currently offline. 😔",
+        );
+
+      const summaryPrompt = `
+        You are Manvi. Viswanath asked: "${message}". 
+        I found these search results from ${searchResults.source}:
+        ${searchResults.data}
+        
+        Please provide a concise, friendly answer based ONLY on these results. 
+        Mention facts clearly without complex markdown.
+      `;
+
+      const summaryText = await analyzeMessage(summaryPrompt, true);
+      return await respond(
+        `🌐 *Search Results (${searchResults.source})*\n\n${summaryText}`,
+      );
+    }
+
+    // --- 🗑️ DELETE HANDLER ---
     else if (intent === "delete_task") {
       if (!isOwner)
         return await respond(`🔒 Only Viswanath can delete memories.`);
@@ -225,11 +243,10 @@ app.post("/webhook", async (req, res) => {
         "query_events",
       ].includes(intent)
     ) {
-      if (!isOwner) {
+      if (!isOwner)
         return await respond(
           `🔒 I'm sorry ${senderName}, but only Viswanath has clearance to access my global memory banks.`,
         );
-      }
 
       if (intent === "query_contacts") {
         const { data } = await supabase

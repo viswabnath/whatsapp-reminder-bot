@@ -1,75 +1,115 @@
-require("dotenv").config(); // Important so process.env is available here too!
+require("dotenv").config();
 const cron = require("node-cron");
 const sendWhatsAppMessage = require("./sendMessage");
-const supabase = require("./supabase"); // Notice we removed groups.js completely!
+const supabase = require("./supabase");
+
+// Helper: Get Current IST Date Components
+function getISTComponents() {
+  const now = new Date();
+  const options = {
+    timeZone: "Asia/Kolkata",
+    year: "numeric",
+    month: "numeric",
+    day: "numeric",
+  };
+  const formatter = new Intl.DateTimeFormat("en-IN", options);
+  const [{ value: day }, , { value: month }] = formatter.formatToParts(now);
+
+  return {
+    day: parseInt(day),
+    month: parseInt(month),
+    timeStr: new Intl.DateTimeFormat("en-GB", {
+      timeZone: "Asia/Kolkata",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    }).format(now),
+  };
+}
 
 // ---------------------------------------------------------
-// CRON 1: Standard One-Off Reminders (Runs every minute)
+// CRON 1: Standard One-Off Reminders (Every minute)
 // ---------------------------------------------------------
 cron.schedule("* * * * *", async () => {
-  const now = new Date().toISOString(); 
+  const now = new Date().toISOString();
+  const { data: dueReminders } = await supabase
+    .from("personal_reminders")
+    .select("*")
+    .lte("reminder_time", now)
+    .eq("status", "pending");
 
-  const { data: dueReminders, error } = await supabase
-    .from('personal_reminders')
-    .select('*')
-    .lte('reminder_time', now)
-    .eq('status', 'pending');
-
-  if (dueReminders && dueReminders.length > 0) {
+  if (dueReminders?.length > 0) {
     for (const reminder of dueReminders) {
-      // Sends to whoever the target phone was set to
-      await sendWhatsAppMessage(reminder.phone, `✨ Manvi says: ${reminder.message}`);
-      await supabase.from('personal_reminders').update({ status: 'completed' }).eq('id', reminder.id);
+      await sendWhatsAppMessage(
+        reminder.phone,
+        `✨ *Reminder:* ${reminder.message}`,
+      );
+      await supabase
+        .from("personal_reminders")
+        .update({ status: "completed" })
+        .eq("id", reminder.id);
     }
   }
 });
 
 // ---------------------------------------------------------
-// CRON 2: Daily Routines (Runs every minute to check exact times)
+// CRON 2: Daily Routines (Fixed Formatting)
 // ---------------------------------------------------------
 cron.schedule("* * * * *", async () => {
-  const nowIST = new Date().toLocaleTimeString('en-US', { timeZone: 'Asia/Kolkata', hour12: false });
-  const currentTime = nowIST.split(' ')[0]; 
-  const timePrefix = currentTime.substring(0, 5); 
+  const { timeStr } = getISTComponents();
 
   const { data: routines } = await supabase
-    .from('daily_routines')
-    .select('*')
-    .eq('is_active', true)
-    .like('reminder_time', `${timePrefix}%`); 
+    .from("daily_routines")
+    .select("*")
+    .eq("is_active", true)
+    .like("reminder_time", `${timeStr}%`);
 
-  if (routines && routines.length > 0) {
+  if (routines?.length > 0) {
     for (const routine of routines) {
-      await sendWhatsAppMessage(routine.phone, `🔄 Routine check: Time to ${routine.task_name}!`);
+      await sendWhatsAppMessage(
+        routine.phone,
+        `🔄 *Routine:* Time to ${routine.task_name}!`,
+      );
     }
   }
 });
 
 // ---------------------------------------------------------
-// CRON 3: Special Events / Birthdays (Runs once daily at 8:00 AM IST)
+// CRON 3: Special Events (The Double-Alert System)
+// Runs at 8:30 AM IST daily
 // ---------------------------------------------------------
-cron.schedule("0 8 * * *", async () => {
-  const today = new Date();
-  const month = today.getMonth() + 1; 
-  const day = today.getDate();
+cron.schedule("30 8 * * *", async () => {
+  const { day: todayDay, month: todayMonth } = getISTComponents();
 
-  const { data: events } = await supabase
-    .from('special_events')
-    .select('*');
+  // Calculate Tomorrow
+  const tomorrowDate = new Date();
+  tomorrowDate.setDate(tomorrowDate.getDate() + 1);
+  const tomorrowDay = tomorrowDate.getDate();
+  const tomorrowMonth = tomorrowDate.getMonth() + 1;
+
+  const { data: events } = await supabase.from("special_events").select("*");
 
   if (events) {
     for (const event of events) {
-      const eventDate = new Date(event.event_date);
-      if (eventDate.getMonth() + 1 === month && eventDate.getDate() === day) {
+      const eDate = new Date(event.event_date);
+      const eDay = eDate.getDate();
+      const eMonth = eDate.getMonth() + 1;
+
+      // 1. Check for TODAY (The Big Day)
+      if (eDay === todayDay && eMonth === todayMonth) {
         await sendWhatsAppMessage(
-          event.phone, 
-          `🎉 Hey! Just a heads up, today is ${event.person_name}'s ${event.event_type}!`
+          event.phone,
+          `🥳 *TODAY IS THE DAY!*\nIt's ${event.person_name}'s ${event.event_type}! Time to send your best wishes! 🎈`,
+        );
+      }
+
+      // 2. Check for TOMORROW (The 24h Warning)
+      if (eDay === tomorrowDay && eMonth === tomorrowMonth) {
+        await sendWhatsAppMessage(
+          event.phone,
+          `⏳ *Advance Alert:* Tomorrow is ${event.person_name}'s ${event.event_type}!\n\nI'm letting you know now so you can prepare or plan something special. 🎁`,
         );
       }
     }
   }
-}, {
-  timezone: "Asia/Kolkata"
 });
-
-module.exports = {};

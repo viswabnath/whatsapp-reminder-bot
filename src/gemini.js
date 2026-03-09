@@ -1,59 +1,26 @@
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 const { OpenAI } = require("openai");
-const supabase = require("./supabase"); // We need the DB to check the counter
+const { getUsage, track, LIMITS } = require("./usage");
 require("dotenv").config();
 
+// 🧠 Primary Brain: Google Gemini Native
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const primaryModel = genAI.getGenerativeModel({ model: "gemini-2.0-flash" }); // or 2.5-flash
 
-const GEMINI_DAILY_LIMIT = 20; // Set your strict beta limit here
-
-// --- HELPER: Get today's date in IST (YYYY-MM-DD) ---
-function getTodayIST() {
-  return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" }).format(new Date());
-}
-
-// --- HELPER: Check and Increment Daily Counter ---
-async function trackGeminiUsage() {
-  const today = getTodayIST();
-  let { data } = await supabase.from("api_usage").select("gemini_count").eq("usage_date", today).single();
-  
-  if (!data) {
-    await supabase.from("api_usage").insert([{ usage_date: today, gemini_count: 0 }]);
-    data = { gemini_count: 0 };
-  }
-
-  if (data.gemini_count < GEMINI_DAILY_LIMIT) {
-    await supabase.from("api_usage").update({ gemini_count: data.gemini_count + 1 }).eq("usage_date", today);
-    return { allowed: true, remaining: GEMINI_DAILY_LIMIT - (data.gemini_count + 1) };
-  }
-  return { allowed: false, remaining: 0 };
-}
-
-// --- FALLBACK: Route to OpenAI ---
-async function callOpenAIFallback(systemPrompt, userMessage) {
-  console.log("🔄 Routing to OpenAI Fallback...");
-  try {
-    const response = await openai.chat.completions.create({
-      model: "gpt-4o-mini", // Fast, incredibly cheap, great at JSON
-      response_format: { type: "json_object" }, // Forces strict JSON
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userMessage }
-      ]
-    });
-    return JSON.parse(response.choices[0].message.content);
-  } catch (error) {
-    console.error("OpenAI Fallback Error:", error);
-    return { intent: "api_error", targetName: "you", time: null, date: null, taskOrMessage: "Both Gemini and the Fallback AI are currently down." };
-  }
-}
+// 🧠 Backup Brain: OpenRouter
+const backupAI = new OpenAI({
+  baseURL: "https://openrouter.ai/api/v1",
+  apiKey: process.env.OPENROUTER_API_KEY,
+});
 
 // --- MAIN ROUTER ---
-async function analyzeMessage(userMessage) {
-  const currentIST = new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" });
+async function analyzeMessage(userMessage, isSummaryRequest = false) {
+  const usageStats = await getUsage();
+  const currentIST = new Date().toLocaleString("en-US", {
+    timeZone: "Asia/Kolkata",
+  });
 
-  const prompt = `
+  const systemPrompt = `
   You are the intelligent brain of a personal WhatsApp assistant named Manvi. 
   Your owner is Viswanath. You are currently talking to a user via WhatsApp.
   
@@ -66,14 +33,17 @@ async function analyzeMessage(userMessage) {
   
   Use this exact JSON structure:
   {
-    "intent": "reminder" | "routine" | "event" | "instant_message" | "chat" | "query_birthday" | "query_schedule" | "query_routines" | "query_contacts" | "query_reminders" | "query_events" | "delete_task" | "unknown",
+    "intent": "reminder" | "routine" | "event" | "instant_message" | "chat" | "query_birthday" | "query_schedule" | "query_routines" | "query_contacts" | "query_reminders" | "query_events" | "delete_task" | "web_search" | "unknown",
     "targetName": "you" (Use "you" if the message is meant for Viswanath, "him", "he", or "owner") OR the extracted name,
     "time": "HH:MM:SS" (in 24-hour format if a time is mentioned/calculated. Assume IST timezone.),
     "date": "YYYY-MM-DD" (if a specific date is mentioned/calculated for queries or events),
-    "taskOrMessage": "The cleaned up task/message. For deletions, extract what needs to be deleted (e.g., 'drink water')"
+    "taskOrMessage": "The cleaned up task/message. For deletions, extract what needs to be deleted. For web_search, extract the optimized search query."
   }
 
   Examples:
+  Message: "What was the recent f1 grand prix held, where and who won it?"
+  JSON: {"intent": "web_search", "targetName": "you", "time": null, "date": null, "taskOrMessage": "recent f1 grand prix winner and location"}
+
   Message: "What contacts do you have?"
   JSON: {"intent": "query_contacts", "targetName": "you", "time": null, "date": null, "taskOrMessage": null}
 
@@ -108,36 +78,80 @@ async function analyzeMessage(userMessage) {
   Message: "${userMessage}"
   `;
 
-  const usage = await trackGeminiUsage();
-  let finalJSON;
+  // --- 1. TRY PRIMARY (GEMINI DIRECT) ---
+  if (usageStats.gemini < LIMITS.gemini) {
+    try {
+      const promptToSend = isSummaryRequest
+        ? userMessage
+        : systemPrompt + `\nAnalyze: ${userMessage}`;
+      const result = await primaryModel.generateContent(promptToSend);
+      const responseText = result.response.text();
 
-  if (!usage.allowed) {
-    // 🚦 LIMIT REACHED: Route directly to OpenAI
-    finalJSON = await callOpenAIFallback(prompt, userMessage);
-    finalJSON.ai_meta = "🤖 Fallback AI Active";
-    return finalJSON;
+      await track("gemini");
+
+      if (isSummaryRequest) return responseText;
+
+      const cleanJSON = responseText.match(/\{[\s\S]*\}/);
+      if (!cleanJSON) throw new Error("No JSON found");
+
+      const parsed = JSON.parse(cleanJSON[0]);
+      parsed.ai_meta = `⚡ ${LIMITS.gemini - usageStats.gemini - 1} Gemini left`;
+      return parsed;
+    } catch (err) {
+      console.warn(
+        "⚠️ Gemini failed, falling back to OpenRouter...",
+        err.message,
+      );
+    }
   }
 
-  // 2. We have quota! Try Gemini 2.5
-  try {
-    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash", generationConfig: { responseMimeType: "application/json" } });
-    const result = await model.generateContent(prompt);
-    let text = result.response.text();
-    
-    const jsonMatch = text.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) throw new Error("No JSON found");
-    
-   finalJSON = JSON.parse(jsonMatch[0]);
-    finalJSON.ai_meta = `⚡ ${usage.remaining} Gemini requests left`;
-    return finalJSON;
-    
-  } catch (error) {
-    console.error("Gemini crashed, falling back:", error.message);
-   // 🚦 GEMINI CRASHED: Route to OpenAI as safety net
-    finalJSON = await callOpenAIFallback(prompt, userMessage);
-    finalJSON.ai_meta = "🤖 Fallback AI Active (Gemini Error)";
-    return finalJSON;
+  // --- 2. TRY BACKUP (OPENROUTER) ---
+  if (usageStats.openrouter < LIMITS.openrouter) {
+    try {
+      console.log("🔄 Routing to OpenRouter Fallback...");
+      const response = await backupAI.chat.completions.create({
+        model: "google/gemini-2.0-flash:free",
+        messages: [
+          {
+            role: "system",
+            content: isSummaryRequest
+              ? "You are Manvi. Summarize the following data concisely."
+              : systemPrompt,
+          },
+          { role: "user", content: userMessage },
+        ],
+      });
+
+      await track("openrouter");
+      const backupText = response.choices[0].message.content;
+
+      if (isSummaryRequest) return backupText;
+
+      const jsonMatch = backupText.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) throw new Error("No JSON found");
+
+      const parsedBackup = JSON.parse(jsonMatch[0]);
+      parsedBackup.ai_meta = `🤖 ${LIMITS.openrouter - usageStats.openrouter - 1} OpenRouter left`;
+      return parsedBackup;
+    } catch (backupErr) {
+      console.error("OpenAI Fallback Error:", backupErr);
+      return {
+        intent: "api_error",
+        targetName: "you",
+        time: null,
+        date: null,
+        taskOrMessage: "All AI models are offline or limits reached.",
+      };
+    }
   }
+
+  return {
+    intent: "api_error",
+    targetName: "you",
+    time: null,
+    date: null,
+    taskOrMessage: "Daily AI limits reached. Check /limit.",
+  };
 }
 
 module.exports = { analyzeMessage };

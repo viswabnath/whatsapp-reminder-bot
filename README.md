@@ -1,8 +1,8 @@
-# 🧠 Manvi — Your Second Brain
+# 🧠 Manvi — Your Agentic Second Brain
 
-> *A personal WhatsApp assistant that remembers so you don't have to.*
+> *A personal WhatsApp assistant that remembers, researches, and monitors itself.*
 
-Built by [Onemark](https://onemark.digital) · Designed for people who think in messages, not apps.
+Built by [Onemark](https://onemark.digital) · The ultimate friction-less assistant.
 
 ---
 
@@ -20,19 +20,41 @@ Done. Manvi's AI parses the intent, stores it securely in PostgreSQL, and pings 
 
 ---
 
+## ✨ What's New in Manvi 2.0
+
+Manvi is now an **Agentic AI** with built-in redundancy and live web access:
+
+- 🧠 **Dual-Brain Architecture**: Uses Google Gemini 2.0 Flash as the primary engine with a seamless fallback to OpenRouter if limits are hit.
+- 🌐 **Live Web Search**: Integrated Tavily (Primary) and Serper (Emergency Fallback) for real-time information.
+- 📊 **Usage Tracking**: Real-time monitoring of API quotas across all services via the `/limit` command.
+- 🚨 **Autonomous Alerts**: Manvi will text you automatically when your search credits are running low.
+- 🔔 **Double-Lock Event Alerts**: Special events fire two alerts — a 24-hour advance warning to plan ahead, and a celebratory alert on the actual day.
+- 🔄 **Hardened Routines**: Daily routines use strict IST 24-hour time-matching so they never miss a beat.
+
+---
+
 ## ✨ What Manvi Does
 
 ```
 🤖  AI Powered             Understands messy, natural language using Gemini 2.0 Flash
+                          with seamless fallback to OpenRouter
+
+🌐  Live Web Search        "Who won the game yesterday?" or "What's the weather in Vizag?"
+                          Powered by Tavily (primary) and Serper (fallback)
 
 🔍  Memory Retrieval       "What is my schedule today?" or "When is dad's birthday?"
                           Instantly queries the database to fetch saved events
-                          
+
 🔔  One-Off Reminders      "Remind me at 3 PM to call dad"
                           Extracts the task and time automatically
 
-🔄  Daily Routines         "Set a routine to remind mom to take medicine at 9 AM"
-                          Set it once, runs every day forever
+🔔  Double-Lock Event      "Manu's birthday is on Feb 9th"
+    Alerts                Gets you an early-warning alert 24 hours before
+                          to plan, and a second alert on the actual day
+
+🔄  Hardened Routines      "Set a routine to check logs at 9 AM"
+                          Engineered with strict 24-hour IST time-matching
+                          so daily routines never miss a beat
 
 🎂  Yearly Events          "Manu's birthday is on Feb 9th 2026"
                           Never miss a birthday or anniversary again
@@ -40,11 +62,11 @@ Done. Manvi's AI parses the intent, stores it securely in PostgreSQL, and pings 
 ✉️  Instant Dispatch       "Tell Manu I will be 10 minutes late"
                           Forwards messages instantly via the bot
 
+📊  Usage Dashboard        /limit — See remaining API credits across all brains and search engines
+
 💬  Conversational Chat    Can answer simple questions and tell jokes when prompted
 
 🔒  Admin-Only Access      Caller ID verification blocks guests from accessing global lists
-
-📊  Stealth Logger         All interactions logged to database for analytics and debugging
 
 📇  Secure Address Book    Cross-references names with a secure Supabase database
 
@@ -61,6 +83,22 @@ Because Manvi uses AI, you don't need to memorize commands. Just talk to her nat
 ```
 You:   Remind me to drink water at 2:00 PM
 Manvi: ✅ Reminder set for you at 2:00 PM
+```
+
+### Double-Lock Event Alerts
+```
+(Day before Manu's birthday — 08:30 AM IST)
+Manvi: ⏳ Advance Alert: Tomorrow is Manu's birthday!
+       I'm letting you know now so you can prepare something special. 🎁
+
+(On Manu's birthday — 08:30 AM IST)
+Manvi: 🥳 TODAY IS THE DAY! It's Manu's birthday! Time to send your best wishes! 🎈
+```
+
+### Live Web Search
+```
+You:   Who won the IPL match yesterday?
+Manvi: 🌐 Here's what I found...
 ```
 
 ### Memory Retrieval (Schedules & Dates)
@@ -83,6 +121,20 @@ Manvi: 🎂 Dad's birthday is saved as 1970-05-15.
 You:   Shoot a text over to Manu and tell her I'm heading home
 Manvi: ✅ Message successfully sent to Manu!
 (Manu receives: ✨ Message from Viswanath: I'm heading home)
+```
+
+### Usage Dashboard
+```
+You:   /limit
+Manvi: 📊 Manvi System Limits
+
+       🧠 AI BRAINS
+       • Gemini: 320 / 1,500
+       • OpenRouter: 2 / 50
+
+       🔍 SEARCH ENGINES
+       • Tavily (Monthly): 45 / 1,000
+       • Serper (Lifetime): 12 / 2,500
 ```
 
 ### Conversational Chat
@@ -109,20 +161,21 @@ Manvi: 🔒 I'm sorry Manu, but only Viswanath has clearance to access my global
 
 ## 🏗 Tech Stack
 
-| Layer        | Technology                     |
-|--------------|--------------------------------|
-| Runtime      | Node.js + Express              |
-| Messaging    | Meta Cloud API (WhatsApp)      |
-| AI Engine    | Google Gemini API (Flash 2.5)  |
-| Database     | Supabase (PostgreSQL)          |
-| Scheduler    | node-cron (IST timezone-aware) |
-| Hosting      | Render.com                     |
+| Layer        | Technology                                    |
+|--------------|-----------------------------------------------|
+| Runtime      | Node.js + Express                             |
+| Messaging    | Meta Cloud API (WhatsApp)                     |
+| AI Engine    | Google Gemini 2.0 Flash + OpenRouter Fallback |
+| Web Search   | Tavily (Primary) + Serper (Fallback)          |
+| Database     | Supabase (PostgreSQL)                         |
+| Scheduler    | node-cron (IST timezone-aware)                |
+| Hosting      | Render.com                                    |
 
 ---
 
 ## 🗄 Database Schema
 
-Manvi's brain runs on five Supabase tables. Run these in your Supabase SQL Editor:
+Manvi's brain runs on six tables plus one helper function. Run all of these in your Supabase SQL Editor:
 
 ```sql
 -- 1. Address Book — names → phone numbers
@@ -144,6 +197,7 @@ CREATE TABLE personal_reminders (
 );
 
 -- 3. Daily Routines
+-- reminder_time must be stored as HH:mm 24-hour format e.g. 09:00
 CREATE TABLE daily_routines (
   id SERIAL PRIMARY KEY,
   phone VARCHAR(20) NOT NULL,
@@ -172,16 +226,36 @@ CREATE TABLE interaction_logs (
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
--- 6. API Usage Tracker (Limits and Fallbacks)
+-- 6. API Usage Tracker
 CREATE TABLE api_usage (
   usage_date DATE PRIMARY KEY,
-  gemini_count INT DEFAULT 0
+  gemini_count INT DEFAULT 0,
+  openrouter_count INT DEFAULT 0,
+  tavily_count INT DEFAULT 0,
+  serper_count INT DEFAULT 0
 );
+
+-- 7. Required RPC Function — used by usage.js to safely increment counts
+CREATE OR REPLACE FUNCTION increment_api_usage(target_date DATE, column_name TEXT)
+RETURNS void AS $$
+BEGIN
+  INSERT INTO api_usage (usage_date)
+  VALUES (target_date)
+  ON CONFLICT (usage_date) DO NOTHING;
+
+  EXECUTE format(
+    'UPDATE api_usage SET %I = %I + 1 WHERE usage_date = $1',
+    column_name, column_name
+  ) USING target_date;
+END;
+$$ LANGUAGE plpgsql;
 ```
 
 ---
 
 ## 🚀 Setup — Get Manvi Running
+
+> 💡 All external services used in this project have **free tiers that are sufficient to run Manvi personally** — no credit card required to get started.
 
 ### 1 · Clone the repo
 
@@ -209,8 +283,12 @@ SUPABASE_URL=https://[your-project-id].supabase.co
 SUPABASE_KEY=your_supabase_secret_key
 
 # AI Models & Fallbacks
-GEMINI_API_KEY=your_gemini_api_key_here
-OPENAI_API_KEY=your_openai_secret_key_here
+GEMINI_API_KEY=your_gemini_api_key_here         # Primary Brain — 1,500 req/day
+OPENROUTER_API_KEY=your_openrouter_api_key_here  # Fallback Brain — 50 req/day safety cap
+
+# Search APIs
+TAVILY_API_KEY=your_tavily_api_key_here          # Primary Search — 1,000 req/month
+SERPER_API_KEY=your_serper_api_key_here          # Backup Search — 2,500 req/lifetime
 ```
 
 ### 3 · Run locally
@@ -239,10 +317,12 @@ Manvi will be live at `http://localhost:3000`
 manvi-whatsapp-assistant/
 ├── src/
 │   ├── server.js           # Webhook handler, AI router & Caller ID
-│   ├── scheduler.js        # node-cron IST job runner
+│   ├── scheduler.js        # node-cron IST job runner (reminders, routines, events)
 │   ├── supabase.js         # Database connection client
 │   ├── sendMessage.js      # Meta WhatsApp API wrapper
-│   └── gemini.js           # Natural language prompt engineering & parsing
+│   ├── gemini.js           # Natural language prompt engineering & parsing
+│   ├── search.js           # Tavily + Serper search orchestration
+│   └── usage.js            # API quota tracking and limit checks
 ├── .env                    # 🔒 Never commit — secrets only
 ├── .gitignore
 ├── package.json
@@ -283,11 +363,27 @@ Your `ACCESS_TOKEN` expired (24-hour limit for temporary tokens). Refresh it in 
 
 ### "Reminder didn't fire at the right time"
 
-Check your server's timezone. Manvi uses IST by default — if your server is in UTC, cron jobs will fire 5.5 hours early.
+`personal_reminders` uses full ISO timestamp comparison (`.lte`), not time string matching. Ensure `buildReminderDate()` in `server.js` is generating the correct `+05:30` offset timestamp when inserting.
+
+### "Routine fired at wrong time or skipped"
+
+Ensure `reminder_time` values in `daily_routines` are stored in `HH:mm` 24-hour format (e.g., `09:00`, not `9:00 AM`). The scheduler uses exact string prefix matching against current IST time.
+
+### "Special event alert didn't fire"
+
+Special event alerts run once daily at **08:30 AM IST**. Verify your server is alive at that time and that the event's month/day in the database is correct.
+
+### "API usage not tracking — RPC error"
+
+The `increment_api_usage` Postgres function must exist in Supabase. Run the RPC function from the Database Schema section above in your Supabase SQL Editor.
 
 ### Render instance sleeping
 
 Free Render instances sleep after 15 minutes of inactivity. Set up a cron-job at [cron-job.org](https://cron-job.org) to ping your root URL every 10 minutes.
+
+### "Search returned no results" or fallback triggered
+
+Tavily monthly quota (1,000 req) may be exhausted. Manvi will automatically switch to Serper and alert you via WhatsApp. Run `/limit` to check current usage.
 
 ---
 
