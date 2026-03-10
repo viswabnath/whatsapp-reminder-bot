@@ -55,15 +55,24 @@ async function analyzeMessage(userMessage, isSummaryRequest = false) {
   Your job is to extract the user's intent and return a JSON object.
   Respond with ONLY a valid raw JSON object. No markdown. No explanation.
 
+  IMPORTANT RULES:
+- "event": Use ONLY when the user is ASKING TO SAVE or ADD a new birthday, anniversary, or special date to the database. Do NOT use this if the user explicitly asks to be "reminded" of something. 
+- "query_birthday": Use ONLY when the user is ASKING FOR INFORMATION about an existing birthday (e.g., 'When is Manu's birthday?'). Do NOT use this if they are trying to save a date.
+- "instant_message": Use to forward messages.
+- "routine" intent is ONLY for daily recurring tasks at a fixed time (e.g., "every day at 9 AM"). NOT for interval-based reminders like "every 5 minutes" or "every hour". Interval requests should be classified as "chat" with a polite explanation that only daily fixed-time routines are supported.
+- "delete_task" intent: extract ONLY the core task name. Strip words like "routine", "reminder", "task", "event" from taskOrMessage. Example: "Delete Drink Water routine" → taskOrMessage: "Drink Water".
+- "reminder" intent: Use whenever the user explicitly asks to be "reminded" of something, even if it includes a future date or special occasion. taskOrMessage must be the actual task description. If the user says "remind me in X minutes" with no task specified, use "reminder" as taskOrMessage.
+- Vague queries like "list all", "show everything", "what do you have" should be classified as "chat" with taskOrMessage explaining what Manvi can list (reminders, routines, events, contacts).
+
   JSON structure:
   {
-    "intent": "reminder" | "routine" | "event" | "instant_message" | "chat" | "query_birthday" | "query_schedule" | "query_routines" | "query_contacts" | "query_reminders" | "query_events" | "delete_task" | "save_contact" | "web_search" | "unknown",
-    "targetName": "you" (if message is for Viswanath, "him", "he", or "owner") OR the extracted name,
-    "time": "HH:MM:SS" (24-hour format, IST timezone, or null),
-    "date": "YYYY-MM-DD" (if a date is mentioned or calculable, or null),
-    "taskOrMessage": "For chat intent: provide a direct response. For save_contact: the extracted name. For all others: extract the task or search query.",
-    "phone": "digits only for save_contact (no spaces, no +, no dashes), null for all others"
-  }
+  "intent": "reminder" | "routine" | "event" | "instant_message" | "chat" | "query_birthday" | "query_schedule" | "query_routines" | "query_contacts" | "query_reminders" | "query_events" | "delete_task" | "save_contact" | "web_search" | "unknown",
+  "targetName": "you" (if message is for Viswanath, "him", "he", or "owner") OR the extracted name,
+  "time": "HH:MM:SS" (24-hour format, IST timezone, or null),
+  "date": "YYYY-MM-DD" (if a date is mentioned or calculable, or null),
+  "taskOrMessage": "For chat intent: provide a direct response. For save_contact: the extracted name. For all others: extract the task or search query.",
+  "phone": "digits only for save_contact (no spaces, no +, no dashes), null for all others"
+}
 
   Examples:
   Message: "What was the recent F1 grand prix and who won?"

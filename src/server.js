@@ -15,12 +15,35 @@ app.use(express.json());
 app.use(express.static("public"));
 
 // ---------------------------------------------------------
+// PAGE ROUTES
+// ---------------------------------------------------------
+app.get("/", (req, res) => {
+  res.sendFile("public/index.html", { root: "." });
+});
+
+app.get("/documentation", (req, res) => {
+  res.sendFile("public/documentation.html", { root: "." });
+});
+
+app.get("/status", (req, res) => {
+  res.sendFile("public/status.html", { root: "." });
+});
+
+// ---------------------------------------------------------
 // HELPERS
 // ---------------------------------------------------------
 
 // Converts AI-extracted HH:MM:SS to a full IST-offset ISO timestamp
-function buildReminderDate(timeString) {
+function buildReminderDate(timeString, dateString = null) {
   const now = new Date();
+
+  // If a specific date was extracted by AI, use it directly
+  if (dateString) {
+    const reminderDate = new Date(`${dateString}T${timeString}+05:30`);
+    return reminderDate.toISOString();
+  }
+
+  // Otherwise default to today IST, rolling to tomorrow if time has passed
   const formatter = new Intl.DateTimeFormat("en-US", {
     timeZone: "Asia/Kolkata",
     year: "numeric",
@@ -33,8 +56,8 @@ function buildReminderDate(timeString) {
   const day = parts.find((p) => p.type === "day").value;
 
   const isoString = `${year}-${month}-${day}T${timeString}+05:30`;
-  let reminderDate = new Date(isoString);
-
+  const reminderDate = new Date(isoString);
+  
   if (reminderDate < now) {
     reminderDate.setDate(reminderDate.getDate() + 1);
   }
@@ -217,6 +240,7 @@ app.post("/webhook", async (req, res) => {
   const queryOnlyIntents = [
     "query_birthday", "query_schedule", "query_events",
     "query_reminders", "query_routines", "query_contacts",
+    "save_contact", // does not need existing contact — creates one
   ];
 
   let targetPhone = process.env.MY_PHONE_NUMBER;
@@ -270,10 +294,13 @@ app.post("/webhook", async (req, res) => {
     if (intent === "delete_task") {
       if (!isOwner) return await respond("Access denied.");
 
+      // Strip trailing type hints the AI may include ("Drink Water Routine" → "Drink Water")
+      const cleanTask = taskOrMessage.replace(/(routine|reminder|task|event)/gi, "").trim();
+
       const { data: remData } = await supabase
         .from("personal_reminders")
         .delete()
-        .ilike("message", `%${taskOrMessage}%`)
+        .ilike("message", `%${cleanTask}%`)
         .select();
       if (remData?.length > 0)
         return await respond(`Deleted reminder: "${remData[0].message}"`);
@@ -281,7 +308,7 @@ app.post("/webhook", async (req, res) => {
       const { data: routData } = await supabase
         .from("daily_routines")
         .delete()
-        .ilike("task_name", `%${taskOrMessage}%`)
+        .ilike("task_name", `%${cleanTask}%`)
         .select();
       if (routData?.length > 0)
         return await respond(`Deleted routine: "${routData[0].task_name}"`);
@@ -289,12 +316,12 @@ app.post("/webhook", async (req, res) => {
       const { data: eventData } = await supabase
         .from("special_events")
         .delete()
-        .ilike("person_name", `%${taskOrMessage}%`)
+        .ilike("person_name", `%${cleanTask}%`)
         .select();
       if (eventData?.length > 0)
         return await respond(`Deleted event for: "${eventData[0].person_name}"`);
 
-      return await respond(`No task matching "${taskOrMessage}" found.`);
+      return await respond(`No task matching "${cleanTask}" found.`);
     }
 
     if (intent === "save_contact") {
@@ -421,15 +448,17 @@ app.post("/webhook", async (req, res) => {
     }
 
     if (intent === "event") {
+      // When owner says "my birthday", finalName is "you" — store as actual name
+      const eventPersonName = finalName.toLowerCase() === "you" ? "Viswanath" : finalName;
       const { error } = await supabase.from("special_events").insert([{
         phone: targetPhone,
         event_type: taskOrMessage,
-        person_name: finalName,
+        person_name: eventPersonName,
         event_date: date,
       }]);
       return await respond(
         !error
-          ? `Saved ${finalName}'s ${taskOrMessage} on ${date}.`
+          ? `Saved ${eventPersonName}'s ${taskOrMessage} on ${date}.`
           : "Failed to save event. Please try again."
       );
     }
@@ -462,7 +491,8 @@ app.post("/webhook", async (req, res) => {
 
     if (intent === "reminder") {
       if (!time) return await respond("Please specify a time for the reminder.");
-      const dbTimestamp = buildReminderDate(time);
+      if (!taskOrMessage || taskOrMessage.trim() === "") return await respond("Please specify what the reminder is for.");
+      const dbTimestamp = buildReminderDate(time, date || null);
       const { error } = await supabase.from("personal_reminders").insert([{
         phone: targetPhone,
         message: taskOrMessage,

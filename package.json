@@ -4,11 +4,14 @@
   "description": "Agentic WhatsApp assistant with 4-tier AI waterfall, live web search, and self-monitoring dashboard",
   "author": "Viswanath Bodasakurthi <viswanath@onemark.digital>",
   "license": "MIT",
-  "main": "server.js",
-"scripts": {
-  "start": "node src/server.js",
-  "dev": "nodemon src/server.js"
-},
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "nodemon src/server.js",
+    "test": "node test.js",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix"
+  },
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
     "@supabase/supabase-js": "^2.97.0",
@@ -19,7 +22,9 @@
     "openai": "^6.25.0"
   },
   "devDependencies": {
-    "nodemon": "^3.1.14"
+    "nodemon": "^3.1.14",
+    "@eslint/js": "^9.0.0",
+    "eslint": "^9.0.0"
   },
   "engines": {
     "node": ">=20.0.0"

@@ -1,16 +1,20 @@
-# Dependency directories
+# Dependencies
 node_modules/
 
-# Environment variables (CRITICAL: Do not remove this)
+# Environment — never commit secrets
 .env
 
-# MacOS folder attributes
+# macOS
 .DS_Store
 
-# npm/yarn debug logs
+# Logs
+*.log
 npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
 
+# Personal deployment files — not for cloners
+# These contain owner-specific branding and are served from your Render instance only.
+# Cloners should build their own landing page and docs.
+public/index.html
+public/documentation.html
 test-ai.js
 test-whatsapp.js

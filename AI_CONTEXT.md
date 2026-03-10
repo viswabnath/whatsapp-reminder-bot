@@ -4,10 +4,18 @@ This document is the authoritative reference for AI coding assistants (Claude, C
 
 ---
 
+## Project Version
+
+**v1.0** — single-owner personal WhatsApp assistant. One `MY_PHONE_NUMBER`, one Supabase instance, one Render deployment.
+
+**Roadmap direction: SaaS** — Future versions will support multiple users on a shared WhatsApp number. The current architecture is intentionally single-tenant but the DB schema is designed to support multi-tenancy (every table has a `phone` column as the tenant key). Do not make architectural decisions that would make multi-tenancy harder to add later.
+
+---
+
 ## Request Flow
 
 ```
-WhatsApp → Meta Webhook → server.js → gemini.js (intent) → server.js (DB execution) → sendMessage.js
+WhatsApp → Meta Webhook POST /webhook → server.js → gemini.js (intent) → server.js (DB execution) → sendMessage.js
 ```
 
 ---
@@ -16,38 +24,54 @@ WhatsApp → Meta Webhook → server.js → gemini.js (intent) → server.js (DB
 
 | File | Responsibility |
 | :--- | :--- |
-| `src/server.js` | Webhook entry point, Caller ID, intent router, API endpoints (`/api/ping`, `/api/status`) |
-| `src/gemini.js` | 4-tier AI waterfall — Gemini 3 → Gemini 2.5 → Groq → GPT-4o-mini |
+| `src/server.js` | Webhook entry point, page routes, Caller ID, intent router, `/api/ping`, `/api/status` |
+| `src/gemini.js` | 4-tier AI waterfall — Gemini 3 Flash → Gemini 2.5 Flash → Groq Llama 3.3 → GPT-4o-mini |
 | `src/search.js` | Web search — Tavily primary, Serper fallback |
 | `src/usage.js` | Self-healing daily row creation, quota reads/writes, low-credit alerts |
 | `src/scheduler.js` | node-cron IST-aware job runner for reminders, routines, and events |
 | `src/supabase.js` | Supabase client initialisation |
 | `src/sendMessage.js` | Meta WhatsApp Cloud API wrapper |
-| `public/index.html` | Manvi OS status dashboard (static) |
-| `public/styles.css` | Dashboard styles |
+| `public/index.html` | Landing page — **gitignored, owner-specific branding** |
+| `public/documentation.html` | Docs site — **gitignored, owner-specific** |
+| `public/status.html` | Manvi OS system dashboard — served at `/status` |
+| `public/styles.css` | Dashboard styles (IBM Plex Mono/Sans) |
 | `public/app.js` | Dashboard frontend — fetches `/api/status`, renders charts and metrics |
+| `test.js` | v1.0 integration test suite — run with `node test.js` from project root |
 | `package.json` | Root level. `src/server.js` requires it as `../package.json` |
+| `.env.example` | Template for all required environment variables |
+
+---
+
+## Express Routes (`src/server.js`)
+
+| Method | Path | Handler |
+| :--- | :--- | :--- |
+| `GET` | `/` | Serves `public/index.html` (landing page) |
+| `GET` | `/documentation` | Serves `public/documentation.html` |
+| `GET` | `/status` | Serves `public/status.html` (dashboard) |
+| `GET` | `/api/ping` | Keep-alive — returns `{ status, latency_ms, timestamp }` |
+| `GET` | `/api/status` | Dashboard data — usage, uptime, limits, jobs, version |
+| `GET` | `/webhook` | Meta webhook verification handshake |
+| `POST` | `/webhook` | Incoming WhatsApp messages — main message handler |
+
+`app.use(express.static("public"))` serves all static assets (CSS, JS). Page routes use `res.sendFile("public/filename.html", { root: "." })`.
 
 ---
 
 ## AI Waterfall — 4 Tiers (`gemini.js`)
 
-Each tier is attempted in order. Cascade only on error or quota exhaustion.
-
 | Tier | Model | Provider | Quota | Tracking |
 | :--- | :--- | :--- | :--- | :--- |
 | 1 | `gemini-3-flash-preview` | Google | ~20 req/day (free) | `gemini_count` |
-| 2 | `gemini-2.5-flash` | Google | ~20 req/day (free) | `gemini_count` (shared with Tier 1, cap: 40) |
+| 2 | `gemini-2.5-flash` | Google | ~20 req/day (free, shared with Tier 1, cap: 40) | `gemini_count` |
 | 3 | `llama-3.3-70b-versatile` | Groq | 3,000 req/day safety cap (free) | `groq_count` |
 | 4 | `openai/gpt-4o-mini` | OpenRouter | 50 req/day safety cap (paid ~$5) | `openrouter_count` |
 
 ### Return Contract
 
-This is critical. Both callers in `server.js` must handle returns correctly.
-
 | Call | Returns |
 | :--- | :--- |
-| `analyzeMessage(msg)` | Parsed JSON with `intent`, `targetName`, `time`, `date`, `taskOrMessage`, `ai_meta` |
+| `analyzeMessage(msg)` | Parsed JSON — `{ intent, targetName, time, date, taskOrMessage, phone, ai_meta }` |
 | `analyzeMessage(prompt, true)` | `{ text: string, ai_meta: string }` — never a plain string |
 
 `server.js` accesses `summaryResult.text` and passes `summaryResult.ai_meta` as `overrideAiMeta` to `respond()`.
@@ -64,100 +88,71 @@ const respond = async (responseText, overrideAiMeta) => {
 };
 ```
 
-**Rules:**
-- `ai_meta` is appended only inside `respond()`. Never manually concatenate it at the call site.
-- For web search, pass `summaryResult.ai_meta` as `overrideAiMeta` — the summarising model may differ from the intent model.
-- `ai_meta` is plain text. No markdown italic wrapping.
+- `ai_meta` is appended only inside `respond()`. Never concatenate it manually at call sites.
+- For web search, pass `summaryResult.ai_meta` as `overrideAiMeta`.
+- `ai_meta` format: plain text `Model Name — N remaining`. No markdown.
+
+---
+
+## Intent List (complete)
+
+```
+reminder | routine | event | instant_message | chat |
+query_birthday | query_schedule | query_events | query_reminders | query_routines | query_contacts |
+delete_task | save_contact | web_search | unknown
+```
+
+### `queryOnlyIntents` — Address Book Bypass
+
+These intents bypass the address book lookup entirely:
+
+```js
+["query_birthday", "query_schedule", "query_events",
+ "query_reminders", "query_routines", "query_contacts",
+ "save_contact"]
+```
+
+### AI Prompt Rules (enforced in `gemini.js` system prompt)
+
+- `routine` is ONLY for fixed daily time — NOT interval-based ("every 5 minutes" → `chat`)
+- `delete_task` — `taskOrMessage` must be the core name only, type words stripped
+- Vague queries ("list all", "show everything") → `chat`
+- `save_contact` — `phone` field carries raw number string; `taskOrMessage` carries the name
 
 ---
 
 ## Scheduler Logic (`scheduler.js`)
 
-All IST operations use `Intl.DateTimeFormat` with `timeZone: "Asia/Kolkata"`.
-
 ### CRON 1 — One-off reminders (`* * * * *`)
-- Queries `personal_reminders` where `status = 'pending'` and `reminder_time <= now` (ISO UTC comparison)
-- `reminder_time` is `TIMESTAMPTZ` — stored by `buildReminderDate()` in `server.js` as a `+05:30` offset ISO string
+- `.lte("reminder_time", new Date().toISOString())` — TIMESTAMPTZ comparison
 - On match: sends message, updates `status` to `'completed'`
 
 ### CRON 2 — Daily routines (`* * * * *`)
-- Gets current IST time as `HH:mm` via `Intl.DateTimeFormat("en-GB", { hour12: false })`
-- Matches `daily_routines` using `.like("reminder_time", \`${timeStr}%\`)` — prefix match against stored `HH:mm` value
-- `reminder_time` in `daily_routines` **must** be `HH:mm` 24-hour format (e.g., `09:00`)
+- `.like("reminder_time", \`${timeStr}%\`)` — HH:mm prefix match
+- `timeStr` = current IST time as `HH:mm` via `Intl.DateTimeFormat("en-GB", { hour12: false })`
 
-### CRON 3 — Special event alerts (`30 8 * * *` — 08:30 IST)
-- Two checks per event in the same run: today (celebratory) and tomorrow (advance warning)
-- Tomorrow calculated via `setDate(getDate() + 1)` in UTC — can be 1 day off near midnight IST, safe for the 08:30 window
-
----
-
-## Usage Tracking (`usage.js`)
-
-- `ensureRowExists()` self-creates today's IST row if missing. Call before any read or write.
-- `track(service)` does SELECT then UPDATE — not atomic. Acceptable for single-user use.
-- `getUsage()` returns: `{ gemini, groq, openrouter, serper, tavily, errorsToday, historyLabels, historyData, errorData, historyRaw, daysTracked }`
-- Low-credit WhatsApp alerts fire at 50, 10, 0 remaining for `serper` and `tavily`
-- All 4-tier failures call `track("error")` — increments `error_count` column, visible on dashboard
+### CRON 3 — Special events (`30 8 * * *` — 08:30 IST)
+- Runs two checks per event in same job: TODAY (celebratory) and TOMORROW (advance warning)
+- Year-agnostic — matches `eDay === todayDay && eMonth === todayMonth` only
 
 ---
 
-## Database Schema
-
-| Table | Key columns | Notes |
-| :--- | :--- | :--- |
-| `contacts` | `name`, `phone` | Address book |
-| `personal_reminders` | `phone`, `message`, `reminder_time TIMESTAMPTZ`, `group_name`, `status` | `status` = `pending` / `completed` |
-| `daily_routines` | `phone`, `task_name`, `reminder_time TIME`, `is_active` | `reminder_time` stored as `HH:mm` |
-| `special_events` | `phone`, `event_type`, `person_name`, `event_date DATE` | |
-| `interaction_logs` | `sender_name`, `sender_phone`, `message`, `bot_response` | Stealth logger |
-| `api_usage` | `usage_date DATE PK`, `gemini_count`, `groq_count`, `openrouter_count`, `tavily_count`, `serper_count`, `error_count` | Rows auto-created by `ensureRowExists()` |
-
-**If upgrading from a pre-Groq install, run:**
-```sql
-ALTER TABLE api_usage ADD COLUMN IF NOT EXISTS groq_count INT DEFAULT 0;
-ALTER TABLE api_usage ADD COLUMN IF NOT EXISTS error_count INT DEFAULT 0;
-```
-
----
-
-## Dashboard (`/api/status`)
-
-Served at the root URL via `app.use(express.static("public"))`.
-
-`/api/status` returns:
-```json
-{
-  "success": true,
-  "version": "3.2.0",
-  "uptime": { "days": 0, "hours": 2, "minutes": 14, "seconds": 32 },
-  "limits": { "gemini": 40, "groq": 3000, "openrouter": 50, "serper": 2500, "tavily": 1000 },
-  "stats": { "gemini": 5, "groq": 0, "openrouter": 0, "serper": 0, "tavily": 12, "errorsToday": 0, "historyLabels": [...], "historyData": [...], "errorData": [...], "historyRaw": [...], "daysTracked": 14 },
-  "jobs": [ { "name": "...", "schedule": "...", "description": "...", "status": "active|scheduled" } ]
-}
-```
-
-`/api/ping` (used by cron-job.org keep-alive) returns:
-```json
-{ "status": "ok", "latency_ms": 42, "timestamp": "..." }
-```
-
----
-
-## `queryOnlyIntents` — Address Book Bypass
-
-These intents do not need a contact phone number. They bypass the address book lookup in `server.js`:
+## `buildReminderDate(timeString, dateString = null)`
 
 ```js
-["query_birthday", "query_schedule", "query_events", "query_reminders", "query_routines", "query_contacts"]
+// With explicit date — uses it directly, no roll-forward
+buildReminderDate("09:00:00", "2027-04-05") → ISO timestamp for 9AM IST on 5 Apr 2027
+
+// Without date — defaults to today IST, rolls to tomorrow if time is past
+buildReminderDate("15:00:00") → today at 3PM IST, or tomorrow if 3PM already passed
 ```
+
+Always pass `date || null` as the second argument in the reminder handler.
 
 ---
 
 ## `save_contact` Intent
 
-Adds or updates an entry in the `contacts` table. Owner only.
-
-**JSON shape returned by AI:**
 ```json
 {
   "intent": "save_contact",
@@ -169,30 +164,106 @@ Adds or updates an entry in the `contacts` table. Owner only.
 }
 ```
 
-**Handler behaviour (`server.js`):**
-- Strips all non-digit characters from `aiResult.phone` before saving
-- Validates minimum 10 digits (rejects if shorter)
-- Uses `upsert` with `onConflict: "name"` — updating an existing contact's number does not create a duplicate
-- `taskOrMessage` carries the name; `aiResult.phone` carries the raw number string from the AI
+Handler: strips non-digits from `aiResult.phone`, validates >= 10 digits, upserts on `name` conflict.
+
+---
+
+## Usage Tracking (`usage.js`)
+
+- `ensureRowExists()` — creates today's IST row if missing. Called before every read/write.
+- `track(service)` — SELECT then UPDATE (not atomic, acceptable for single-user)
+- `getUsage()` returns: `{ gemini, groq, openrouter, serper, tavily, errorsToday, historyLabels, historyData, errorData, historyRaw, daysTracked }`
+- Low-credit alerts at 50, 10, 0 remaining for `serper` and `tavily`
+- `track("error")` called when all 4 AI tiers fail
+
+---
+
+## Database Schema
+
+| Table | Key columns | Notes |
+| :--- | :--- | :--- |
+| `contacts` | `name UNIQUE`, `phone` | Address book. Upsert on `name`. |
+| `personal_reminders` | `phone`, `message`, `reminder_time TIMESTAMPTZ`, `group_name`, `status` | `status` = `pending` / `completed` |
+| `daily_routines` | `phone`, `task_name`, `reminder_time TIME`, `is_active` | `reminder_time` stored as `HH:mm` string |
+| `special_events` | `phone`, `event_type`, `person_name`, `event_date DATE` | Year-agnostic repeat. Owner events use `person_name: "Viswanath"` not `"you"` |
+| `interaction_logs` | `sender_name`, `sender_phone`, `message`, `bot_response` | Stealth logger |
+| `api_usage` | `usage_date DATE PK`, `gemini_count`, `groq_count`, `openrouter_count`, `tavily_count`, `serper_count`, `error_count` | Auto-created by `ensureRowExists()` |
+
+---
+
+## `/api/status` Response Shape
+
+```json
+{
+  "success": true,
+  "version": "3.2.0",
+  "uptime": { "days": 0, "hours": 2, "minutes": 14, "seconds": 32 },
+  "limits": { "gemini": 40, "groq": 3000, "openrouter": 50, "serper": 2500, "tavily": 1000 },
+  "stats": { "gemini": 5, "groq": 0, "openrouter": 0, "serper": 0, "tavily": 12,
+             "errorsToday": 0, "historyLabels": [], "historyData": [], "errorData": [],
+             "historyRaw": [], "daysTracked": 14 },
+  "jobs": [ { "name": "...", "schedule": "...", "description": "...", "status": "active|scheduled" } ]
+}
+```
+
+---
+
+## Test Suite (`test.js`)
+
+Run from project root: `node test.js`
+
+Covers: Supabase connectivity, all 6 tables, 16 AI intent scenarios, `buildReminderDate` logic, reminder TIMESTAMPTZ insert/query, routine prefix-match, special event year-agnostic check, contact upsert deduplication, delete `cleanTask` stripping, scheduler queries, usage tracking shape, all 5 HTTP routes.
+
+Uses `TEST_PHONE = "910000000000"` — no real WhatsApp messages are sent. Cleans up all test data after every run.
 
 ---
 
 ## Key Constraints
 
-- **No emojis** in bot-generated WhatsApp messages or server logs — plain text only.
-- **No LaTeX** in WhatsApp responses.
-- **Keep responses concise** — WhatsApp is not a document editor.
-- **IST everywhere** — use `Asia/Kolkata`. Use `Intl.DateTimeFormat("en-GB", { hour12: false })` for `HH:mm`.
-- **Do not conflate reminder time types**: `personal_reminders.reminder_time` is `TIMESTAMPTZ`. `daily_routines.reminder_time` is `HH:mm` string. Different matching logic.
-- **`respond()` owns `ai_meta`** — never append it manually at call sites.
-- **`analyzeMessage(prompt, true)` returns `{ text, ai_meta }`** — never treat as plain string.
-- **`track("groq")` must be called** after every successful Groq response.
-- **`track("error")` must be called** when all 4 tiers fail.
-- **`save_contact` uses `aiResult.phone`** directly — not `taskOrMessage`. Strip non-digits with `replace(/\D/g, "")` before any validation or insert.
-- **`save_contact` upserts on `name`** — never use plain `insert` or you will get duplicate key errors on re-saves.
-- **Caller ID gates admin commands** to `MY_PHONE_NUMBER`.
-- **`package.json` is at the project root** — required in `server.js` as `../package.json` (not `./package.json`).
-- **No hardcoded secrets** — all credentials from `.env`.
+- **No emojis** in bot-generated WhatsApp messages or server logs
+- **No LaTeX** in WhatsApp responses
+- **Keep responses concise** — WhatsApp is not a document editor
+- **IST everywhere** — `Asia/Kolkata`. Use `Intl.DateTimeFormat("en-GB", { hour12: false })` for `HH:mm`
+- **Do not conflate reminder types** — `personal_reminders.reminder_time` is `TIMESTAMPTZ`; `daily_routines.reminder_time` is `HH:mm`
+- **`respond()` owns `ai_meta`** — never append manually
+- **`analyzeMessage(prompt, true)` returns `{ text, ai_meta }`** — never treat as plain string
+- **`track("groq")` must be called** after every successful Groq response
+- **`track("error")` must be called** when all 4 tiers fail
+- **`save_contact` upserts on `name`** — never plain `insert`
+- **`package.json` at project root** — require as `../package.json` from `src/`
+- **`delete_task` uses `cleanTask`** — strip `routine|reminder|task|event` words before ILIKE
+- **Owner events** — `person_name` must be `"Viswanath"` when `finalName === "you"`
+- **No hardcoded secrets** — all from `.env`
+- **Run server from project root** — `npm run dev` or `npm start`
+- **`public/index.html` and `public/documentation.html` are gitignored** — owner branding only, not in repo
+
+---
+
+## SaaS Migration Path (v2.0 target)
+
+The current single-tenant architecture must evolve. Any agent working on features beyond v1.0 must consider these constraints:
+
+### What already supports multi-tenancy
+- Every DB table has a `phone` column — this is the de-facto tenant key
+- Webhook already routes by sender phone — different senders already get different behaviour
+- `isOwner` check is the only hardcoded single-tenant gate
+
+### What must change for multi-tenancy
+
+| Component | Current | SaaS target |
+| :--- | :--- | :--- |
+| `MY_PHONE_NUMBER` | Single `.env` value | `users` table, registration flow |
+| `isOwner` check | `senderPhone === MY_PHONE_NUMBER` | Role from DB (`user.role`) |
+| API quotas | Owner absorbs all costs | Per-user quota tracking or subscription tier |
+| Meta WhatsApp number | Owner's personal number | Shared business number routing by sender |
+| `api_usage` table | Single instance-wide counter | Per-user usage rows |
+| Admin intents | Owner-only | Scoped to authenticated user's own data |
+
+### Design rules for new features (pre-SaaS)
+- Never hardcode owner name `"Viswanath"` in new business logic — use a config value or DB lookup
+- Always filter DB queries by `phone` — never fetch all rows across all users
+- Do not add new `.env` values that assume a single user — design for a `users` table lookup instead
+- `track()` in `usage.js` is instance-wide today — flag any feature that would need per-user tracking
 
 ---
 
@@ -200,6 +271,10 @@ Adds or updates an entry in the `contacts` table. Owner only.
 
 | Issue | Impact | Mitigation |
 | :--- | :--- | :--- |
-| `track()` not atomic | Race condition on double-tap | Acceptable for single-user use |
-| Webhook duplicate delivery | Same message processed twice | Acceptable for personal use; add `messageId` dedup if needed |
-| Tomorrow UTC edge case | Event alert 1 day off near midnight IST | Safe for 08:30 cron window |
+| `track()` not atomic | Race condition on double-tap | Acceptable for single-user |
+| Single-tenant `api_usage` | One row per day for entire instance | Must become per-user in v2.0 |
+| `"Viswanath"` hardcoded in event handler | Wrong name for other users | Replace with DB user lookup in v2.0 |
+| `MY_PHONE_NUMBER` env var | One owner globally | Replace with `users` table lookup in v2.0 |
+| Webhook duplicate delivery | Same message processed twice | Acceptable for personal use |
+| Tomorrow UTC edge case in CRON 3 | Event alert 1 day off near midnight IST | Safe for 08:30 window |
+| Interval reminders not supported | "Every 5 mins" cannot be a routine | AI prompt rejects, explains to user |

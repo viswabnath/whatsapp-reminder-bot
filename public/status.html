@@ -1,0 +1,605 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>System Status — Manvi</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --green: #25D366;
+      --green-dark: #128C7E;
+      --green-muted: #e8faf0;
+      --bg: #0d1117;
+      --bg-2: #161b22;
+      --bg-3: #21262d;
+      --text-1: #e6edf3;
+      --text-2: #8b949e;
+      --text-3: #484f58;
+      --border: #30363d;
+      --blue: #58a6ff;
+      --violet: #bc8cff;
+      --amber: #d29922;
+      --teal: #3fb950;
+      --rose: #f85149;
+      --font: 'DM Sans', system-ui, sans-serif;
+      --mono: 'IBM Plex Mono', monospace;
+    }
+
+    body.light {
+      --bg: #f7f8f9;
+      --bg-2: #ffffff;
+      --bg-3: #f0f1f3;
+      --text-1: #0d1117;
+      --text-2: #4b5563;
+      --text-3: #9ca3af;
+      --border: #e5e7eb;
+    }
+
+    html { -webkit-font-smoothing: antialiased; }
+
+    body {
+      font-family: var(--font);
+      background: var(--bg);
+      color: var(--text-1);
+      min-height: 100vh;
+    }
+
+    /* TOP NAV */
+    .top-nav {
+      background: var(--bg-2);
+      border-bottom: 1px solid var(--border);
+      padding: 0 1.5rem;
+      height: 52px;
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+
+    .top-nav-logo {
+      font-family: 'DM Sans', sans-serif;
+      font-size: 1rem;
+      font-weight: 600;
+      color: var(--text-1);
+      text-decoration: none;
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+    }
+
+    .top-nav-logo .dot {
+      width: 7px; height: 7px;
+      background: var(--green);
+      border-radius: 50%;
+    }
+
+    .top-nav-sep {
+      color: var(--text-3);
+      font-size: 0.85rem;
+    }
+
+    .top-nav-page {
+      font-size: 0.85rem;
+      color: var(--text-2);
+    }
+
+    .top-nav-links {
+      margin-left: auto;
+      display: flex;
+      align-items: center;
+      gap: 0.25rem;
+    }
+
+    .top-nav-links a {
+      font-size: 0.8rem;
+      font-weight: 500;
+      color: var(--text-2);
+      text-decoration: none;
+      padding: 0.35rem 0.7rem;
+      border-radius: 6px;
+      transition: color 0.15s, background 0.15s;
+    }
+
+    .top-nav-links a:hover { color: var(--text-1); background: var(--bg-3); }
+
+    /* CONTAINER */
+    .container {
+      max-width: 1040px;
+      margin: 0 auto;
+      padding: 2rem 1.5rem 4rem;
+    }
+
+    /* HEADER */
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 2rem;
+    }
+
+    .wordmark {
+      font-family: var(--mono);
+      font-size: 1rem;
+      font-weight: 600;
+      letter-spacing: 0.12em;
+      color: var(--text-1);
+    }
+
+    .wordmark span { color: var(--green); }
+
+    .header-right {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+
+    .version {
+      font-family: var(--mono);
+      font-size: 0.72rem;
+      color: var(--text-3);
+      background: var(--bg-3);
+      border: 1px solid var(--border);
+      padding: 0.2rem 0.5rem;
+      border-radius: 4px;
+    }
+
+    .theme-btn {
+      font-family: var(--mono);
+      font-size: 0.72rem;
+      background: var(--bg-3);
+      border: 1px solid var(--border);
+      color: var(--text-2);
+      padding: 0.25rem 0.6rem;
+      border-radius: 4px;
+      cursor: pointer;
+      transition: border-color 0.15s;
+    }
+
+    .theme-btn:hover { border-color: var(--text-2); }
+
+    .status-badge {
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      font-family: var(--mono);
+      font-size: 0.72rem;
+      color: var(--text-2);
+      background: var(--bg-3);
+      border: 1px solid var(--border);
+      padding: 0.25rem 0.6rem;
+      border-radius: 100px;
+    }
+
+    .status-dot {
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      background: var(--text-3);
+    }
+
+    .status-dot.ok { background: var(--teal); box-shadow: 0 0 6px var(--teal); }
+    .status-dot.warn { background: var(--amber); }
+    .status-dot.err { background: var(--rose); }
+
+    /* SECTION LABEL */
+    .section-label {
+      font-family: var(--mono);
+      font-size: 0.68rem;
+      font-weight: 500;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--text-3);
+      margin-bottom: 0.75rem;
+    }
+
+    /* UPTIME */
+    .uptime-section {
+      background: var(--bg-2);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1.25rem 1.5rem;
+      margin-bottom: 1.25rem;
+    }
+
+    .uptime-row {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+    }
+
+    .uptime-label {
+      font-family: var(--mono);
+      font-size: 0.75rem;
+      color: var(--text-2);
+      width: 160px;
+      flex-shrink: 0;
+    }
+
+    .uptime-blocks {
+      display: flex;
+      gap: 2px;
+      flex: 1;
+    }
+
+    .uptime-block {
+      height: 24px;
+      flex: 1;
+      border-radius: 2px;
+      background: var(--bg-3);
+      cursor: default;
+    }
+
+    .uptime-block.ok { background: var(--teal); }
+    .uptime-block.err { background: var(--rose); }
+
+    .uptime-status {
+      font-family: var(--mono);
+      font-size: 0.72rem;
+      color: var(--text-2);
+      width: 70px;
+      text-align: right;
+      flex-shrink: 0;
+    }
+
+    /* METRICS */
+    .metrics-grid {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 1rem;
+      margin-bottom: 1.25rem;
+    }
+
+    .metric-card {
+      background: var(--bg-2);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1.1rem 1.25rem;
+      transition: border-color 0.15s;
+    }
+
+    .metric-card:hover { border-color: var(--text-3); }
+
+    .metric-tier {
+      font-family: var(--mono);
+      font-size: 0.6rem;
+      font-weight: 500;
+      letter-spacing: 0.1em;
+      color: var(--text-3);
+      text-transform: uppercase;
+      margin-bottom: 0.4rem;
+    }
+
+    .metric-name {
+      font-size: 0.85rem;
+      font-weight: 600;
+      color: var(--text-1);
+      margin-bottom: 0.5rem;
+    }
+
+    .metric-value {
+      font-family: var(--mono);
+      font-size: 1.4rem;
+      font-weight: 500;
+      color: var(--text-1);
+      line-height: 1;
+      margin-bottom: 0.6rem;
+    }
+
+    .metric-limit {
+      font-size: 0.75rem;
+      color: var(--text-3);
+      font-weight: 400;
+    }
+
+    .progress-track {
+      height: 3px;
+      background: var(--bg-3);
+      border-radius: 2px;
+      overflow: hidden;
+    }
+
+    .progress-fill {
+      height: 100%;
+      border-radius: 2px;
+      width: 0%;
+      transition: width 1s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    .progress-fill.blue { background: var(--blue); }
+    .progress-fill.violet { background: var(--violet); }
+    .progress-fill.amber { background: var(--amber); }
+    .progress-fill.teal { background: var(--teal); }
+    .progress-fill.rose { background: var(--rose); }
+
+    /* CHART */
+    .chart-section {
+      background: var(--bg-2);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1.25rem 1.5rem;
+      margin-bottom: 1.25rem;
+    }
+
+    .chart-legend {
+      display: flex;
+      gap: 1.25rem;
+      margin-bottom: 1rem;
+    }
+
+    .legend-item {
+      font-family: var(--mono);
+      font-size: 0.7rem;
+      color: var(--text-2);
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+    }
+
+    .legend-item::before {
+      content: '';
+      width: 20px; height: 2px;
+      border-radius: 1px;
+      display: block;
+    }
+
+    .legend-item.blue::before { background: var(--blue); }
+    .legend-item.rose::before { background: var(--rose); }
+
+    /* JOBS */
+    .jobs-section {
+      background: var(--bg-2);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1.25rem 1.5rem;
+      margin-bottom: 1.25rem;
+    }
+
+    .section-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 0.75rem;
+    }
+
+    .sync-time {
+      font-family: var(--mono);
+      font-size: 0.65rem;
+      color: var(--text-3);
+    }
+
+    .jobs-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.82rem;
+    }
+
+    .jobs-table th {
+      font-family: var(--mono);
+      font-size: 0.65rem;
+      font-weight: 500;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--text-3);
+      text-align: left;
+      padding: 0 0 0.5rem 0;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .jobs-table td {
+      padding: 0.65rem 0;
+      border-bottom: 1px solid var(--border);
+      color: var(--text-2);
+      vertical-align: middle;
+    }
+
+    .jobs-table tr:last-child td { border-bottom: none; }
+
+    .jobs-table td:first-child {
+      font-family: var(--mono);
+      font-size: 0.78rem;
+      color: var(--text-1);
+      font-weight: 500;
+    }
+
+    .jobs-table td:nth-child(2) {
+      font-family: var(--mono);
+      font-size: 0.75rem;
+      color: var(--text-3);
+    }
+
+    .job-status {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      font-family: var(--mono);
+      font-size: 0.68rem;
+      font-weight: 500;
+      padding: 0.2rem 0.5rem;
+      border-radius: 4px;
+    }
+
+    .job-status::before {
+      content: '';
+      width: 5px; height: 5px;
+      border-radius: 50%;
+    }
+
+    .job-status.active { background: rgba(63,185,80,0.12); color: var(--teal); }
+    .job-status.active::before { background: var(--teal); }
+    .job-status.scheduled { background: rgba(88,166,255,0.1); color: var(--blue); }
+    .job-status.scheduled::before { background: var(--blue); }
+
+    .loading-cell {
+      font-family: var(--mono);
+      font-size: 0.75rem;
+      color: var(--text-3);
+      padding: 1.5rem 0;
+      text-align: center;
+    }
+
+    /* FOOTER */
+    footer {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      padding-top: 1.5rem;
+      border-top: 1px solid var(--border);
+    }
+
+    footer span, footer a {
+      font-family: var(--mono);
+      font-size: 0.72rem;
+      color: var(--text-3);
+    }
+
+    footer a { text-decoration: none; transition: color 0.15s; }
+    footer a:hover { color: var(--text-2); }
+    .footer-divider { color: var(--border) !important; }
+
+    .disclaimer-bar {
+      background: rgba(37,211,102,0.08);
+      border-bottom: 1px solid rgba(37,211,102,0.18);
+      text-align: center;
+      padding: 0.55rem 1.5rem;
+      font-family: var(--mono);
+      font-size: 0.68rem;
+      color: var(--text-2);
+      line-height: 1.5;
+    }
+
+    @media (max-width: 760px) {
+      .metrics-grid { grid-template-columns: 1fr 1fr; }
+      .top-nav-links { display: none; }
+    }
+
+    @media (max-width: 480px) {
+      .metrics-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- TOP NAV -->
+  <nav class="top-nav">
+    <a href="/" class="top-nav-logo">
+      <span class="dot"></span>
+      Manvi
+    </a>
+    <span class="top-nav-sep">/</span>
+    <span class="top-nav-page">Status</span>
+    <div class="top-nav-links">
+      <a href="/">Home</a>
+      <a href="/documentation">Docs</a>
+    </div>
+  </nav>
+
+  <div class="disclaimer-bar">
+    This dashboard shows API usage for the deployed instance owner. If you self-host Manvi, this page will display your own usage data from your Supabase database.
+  </div>
+
+  <div class="container">
+
+    <header>
+      <div class="wordmark">MANVI <span>OS</span></div>
+      <div class="header-right">
+        <span class="version" id="versionBadge">v—</span>
+        <button id="themeToggle" class="theme-btn">Light</button>
+        <div class="status-badge" id="systemBadge">
+          <span class="status-dot" id="statusDot"></span>
+          <span id="statusText">Connecting...</span>
+        </div>
+      </div>
+    </header>
+
+    <section class="uptime-section">
+      <div class="section-label">Component Health — 90 Day History</div>
+      <div class="uptime-row">
+        <span class="uptime-label">AI Inference Engine</span>
+        <div class="uptime-blocks" id="uptimeViz"></div>
+        <span class="uptime-status" id="aiStatusText">—</span>
+      </div>
+    </section>
+
+    <section class="metrics-grid">
+      <div class="metric-card" id="card-gemini">
+        <div class="metric-tier">TIER 1 / 2</div>
+        <div class="metric-name">Gemini</div>
+        <div class="metric-value"><span id="geminiCount">0</span><span class="metric-limit">/ <span id="geminiLimit"></span></span></div>
+        <div class="progress-track"><div class="progress-fill blue" id="geminiBar"></div></div>
+      </div>
+
+      <div class="metric-card" id="card-groq">
+        <div class="metric-tier">TIER 3</div>
+        <div class="metric-name">Groq</div>
+        <div class="metric-value"><span id="groqCount">0</span><span class="metric-limit">/ <span id="groqLimit"></span></span></div>
+        <div class="progress-track"><div class="progress-fill violet" id="groqBar"></div></div>
+      </div>
+
+      <div class="metric-card" id="card-or">
+        <div class="metric-tier">TIER 4 — PAID</div>
+        <div class="metric-name">OpenRouter</div>
+        <div class="metric-value"><span id="orCount">0</span><span class="metric-limit">/ <span id="orLimit"></span></span></div>
+        <div class="progress-track"><div class="progress-fill amber" id="orBar"></div></div>
+      </div>
+
+      <div class="metric-card" id="card-tavily">
+        <div class="metric-tier">SEARCH — MONTHLY</div>
+        <div class="metric-name">Tavily</div>
+        <div class="metric-value"><span id="tavilyCount">0</span><span class="metric-limit">/ <span id="tavilyLimit"></span></span></div>
+        <div class="progress-track"><div class="progress-fill teal" id="tavilyBar"></div></div>
+      </div>
+
+      <div class="metric-card" id="card-serper">
+        <div class="metric-tier">SEARCH — LIFETIME</div>
+        <div class="metric-name">Serper</div>
+        <div class="metric-value"><span id="serperCount">0</span><span class="metric-limit">/ <span id="serperLimit"></span></span></div>
+        <div class="progress-track"><div class="progress-fill rose" id="serperBar"></div></div>
+      </div>
+    </section>
+
+    <section class="chart-section">
+      <div class="section-label">7-Day Request Volume</div>
+      <div class="chart-legend">
+        <span class="legend-item blue">Successful Requests</span>
+        <span class="legend-item rose">API Failures</span>
+      </div>
+      <canvas id="usageChart" height="60"></canvas>
+    </section>
+
+    <section class="jobs-section">
+      <div class="section-header">
+        <div class="section-label">Background Processes</div>
+        <span class="sync-time" id="syncTime"></span>
+      </div>
+      <table class="jobs-table">
+        <thead>
+          <tr>
+            <th>Process</th>
+            <th>Schedule</th>
+            <th>Description</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody id="jobsTableBody">
+          <tr><td colspan="4" class="loading-cell">Loading...</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <footer>
+      <span id="uptimeText">Uptime: calculating...</span>
+      <span class="footer-divider">|</span>
+      <a href="https://viswabnath.github.io/portfolio/" target="_blank">Viswanath Bodasakurthi</a> | <a href="https://onemark.co.in/" target="_blank">Onemark</a>
+    </footer>
+
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
