@@ -108,6 +108,17 @@ app.get("/api/ping", async (req, res) => {
 app.get("/api/status", async (req, res) => {
   try {
     const stats = await getUsage();
+
+    // Fetch most recent last_fired_date from daily_routines for dashboard display
+    const { data: routineFireData } = await supabase
+      .from("daily_routines")
+      .select("last_fired_date")
+      .eq("is_active", true)
+      .not("last_fired_date", "is", null)
+      .order("last_fired_date", { ascending: false })
+      .limit(1);
+
+    const lastRoutineFired = routineFireData?.[0]?.last_fired_date || null;
     const uptimeSeconds = process.uptime();
 
     res.json({
@@ -121,7 +132,7 @@ app.get("/api/status", async (req, res) => {
       },
       limits: LIMITS,
       stats,
-     jobs: [
+      jobs: [
         {
           name: "Webhook Listener",
           schedule: "Event-Driven",
@@ -130,10 +141,10 @@ app.get("/api/status", async (req, res) => {
           status: "active",
         },
         {
-          name: "Reminder Dispatch",
+          name: "Reminder & Interval Dispatch",
           schedule: "* * * * *",
-          description: "Fires pending one-off reminders past their scheduled time",
-          layman: "The Watcher: Checks your calendar every minute to ensure reminders fire exactly on time.",
+          description: "Fires pending one-off and interval reminders past their scheduled time",
+          layman: "The Watcher: Checks every minute for due reminders — one-off, future-dated, and repeating interval alerts.",
           status: "scheduled",
         },
         {
@@ -368,19 +379,40 @@ app.post("/webhook", async (req, res) => {
           .gt("reminder_time", nowIso)
           .order("reminder_time");
         if (!data || data.length === 0) return await respond("No upcoming reminders.");
-        let text = "Upcoming Reminders:\n\n";
-        data.forEach((r) => {
-          const t = new Date(r.reminder_time).toLocaleString("en-US", {
-            timeZone: "Asia/Kolkata",
-            month: "short",
-            day: "numeric",
-            hour: "numeric",
-            minute: "2-digit",
-            hour12: true,
+
+        const oneOff = data.filter((r) => r.group_name !== "interval");
+        const interval = data.filter((r) => r.group_name === "interval");
+
+        let text = "";
+
+        if (oneOff.length > 0) {
+          text += "One-off Reminders:\n\n";
+          oneOff.forEach((r) => {
+            const t = new Date(r.reminder_time).toLocaleString("en-US", {
+              timeZone: "Asia/Kolkata", month: "short", day: "numeric",
+              hour: "numeric", minute: "2-digit", hour12: true,
+            });
+            text += `- [${t}] ${r.group_name ? r.group_name + ": " : ""}${r.message}\n`;
           });
-          text += `- [${t}] ${r.group_name ? r.group_name + ": " : ""}${r.message}\n`;
-        });
-        return await respond(text);
+        }
+
+        if (interval.length > 0) {
+          text += `\nInterval Reminders (${interval.length} pending):\n\n`;
+          // Group by message and show next fire time
+          const grouped = {};
+          interval.forEach((r) => {
+            if (!grouped[r.message]) grouped[r.message] = [];
+            grouped[r.message].push(r.reminder_time);
+          });
+          Object.entries(grouped).forEach(([msg, times]) => {
+            const next = new Date(times[0]).toLocaleString("en-US", {
+              timeZone: "Asia/Kolkata", hour: "numeric", minute: "2-digit", hour12: true,
+            });
+            text += `- "${msg}" — ${times.length} alerts remaining, next at ${next}\n`;
+          });
+        }
+
+        return await respond(text.trim());
       }
 
       if (intent === "query_routines") {
@@ -508,6 +540,45 @@ app.post("/webhook", async (req, res) => {
         !error
           ? `Reminder set for ${formatTimeDisplay(time)}.`
           : "Failed to save reminder. Please try again."
+      );
+    }
+
+    if (intent === "interval_reminder") {
+      const intervalMins = parseInt(aiResult.intervalMinutes);
+      const durationHrs = parseInt(aiResult.durationHours) || 8;
+      const task = taskOrMessage || "reminder";
+
+      if (!intervalMins || intervalMins < 1) {
+        return await respond("Please specify how often — e.g. every 30 minutes.");
+      }
+      if (intervalMins < 5) {
+        return await respond("Minimum interval is 5 minutes.");
+      }
+
+      const now = new Date();
+      const endTime = new Date(now.getTime() + durationHrs * 60 * 60 * 1000);
+      const rows = [];
+
+      let next = new Date(now.getTime() + intervalMins * 60 * 1000);
+      while (next <= endTime) {
+        rows.push({
+          phone: targetPhone,
+          message: task,
+          reminder_time: next.toISOString(),
+          group_name: "interval",
+        });
+        next = new Date(next.getTime() + intervalMins * 60 * 1000);
+      }
+
+      if (rows.length === 0) {
+        return await respond("No reminders could be scheduled in that window.");
+      }
+
+      const { error } = await supabase.from("personal_reminders").insert(rows);
+      return await respond(
+        !error
+          ? `Every ${intervalMins} min reminder set for "${task}" — ${rows.length} alerts over the next ${durationHrs} hours.`
+          : "Failed to save interval reminder. Please try again."
       );
     }
 

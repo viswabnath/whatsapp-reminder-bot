@@ -18,6 +18,11 @@ function getISTComponents() {
   return {
     day: parseInt(day),
     month: parseInt(month),
+    // YYYY-MM-DD in IST — used as last_fired_date key
+    todayIST: new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Asia/Kolkata",
+    }).format(now),
+    // HH:mm in IST — used for time comparison
     timeStr: new Intl.DateTimeFormat("en-GB", {
       timeZone: "Asia/Kolkata",
       hour: "2-digit",
@@ -32,6 +37,7 @@ let reminderRunning = false;
 let routineRunning = false;
 
 // CRON 1: One-off reminder dispatch — runs every minute
+// Uses .lte so overdue reminders are never missed even if server restarts late
 cron.schedule("* * * * *", async () => {
   if (reminderRunning) return;
   reminderRunning = true;
@@ -62,22 +68,42 @@ cron.schedule("* * * * *", async () => {
 });
 
 // CRON 2: Daily routine dispatch — runs every minute
+//
+// OLD APPROACH (broken): exact minute match via LIKE "09:00%"
+//   — if server was sleeping at 9:00 AM, routine is silently missed for the day
+//
+// NEW APPROACH: fire if scheduled time has passed today AND not yet fired today
+//   — uses last_fired_date column (DATE) to track per-day firing
+//   — server restart at 10:30 AM will still fire a 9:00 AM routine
+//   — requires: ALTER TABLE daily_routines ADD COLUMN last_fired_date DATE;
 cron.schedule("* * * * *", async () => {
   if (routineRunning) return;
   routineRunning = true;
 
   try {
-    const { timeStr } = getISTComponents();
+    const { timeStr, todayIST } = getISTComponents();
 
+    // Fetch all active routines not yet fired today
     const { data: routines } = await supabase
       .from("daily_routines")
       .select("*")
       .eq("is_active", true)
-      .like("reminder_time", `${timeStr}%`);
+      .or(`last_fired_date.is.null,last_fired_date.neq.${todayIST}`);
 
-    if (routines?.length > 0) {
-      for (const routine of routines) {
+    if (!routines || routines.length === 0) return;
+
+    for (const routine of routines) {
+      // routine.reminder_time is stored as HH:MM:SS by Postgres
+      // Compare HH:MM prefix against current IST HH:mm
+      const routineHHMM = routine.reminder_time.slice(0, 5); // "09:00"
+
+      // Only fire if scheduled time has passed (or is now) — prevents early firing
+      if (timeStr >= routineHHMM) {
         await sendWhatsAppMessage(routine.phone, `Daily Routine: ${routine.task_name}`);
+        await supabase
+          .from("daily_routines")
+          .update({ last_fired_date: todayIST })
+          .eq("id", routine.id);
       }
     }
   } catch (err) {

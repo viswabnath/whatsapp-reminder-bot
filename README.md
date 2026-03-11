@@ -24,10 +24,11 @@ Full setup guide — including Meta webhook configuration, Supabase schema, and 
 | Feature | Example |
 |---|---|
 | One-off reminders | "Remind me to call the bank at 3 PM" |
+| Interval reminders | "Remind me every 30 mins to drink water" |
 | Daily routines | "Remind me to drink water every day at 10 AM" |
 | Birthdays & events | "22nd May is Manu's birthday" |
-| Save contacts | "Save Manu as 919876543210" |
-| Message contacts | "Tell Manu I'll be 10 minutes late" |
+| Save contacts | "Save mom as 919876543210" |
+| Message contacts | "Tell mom I'll be 10 minutes late" |
 | Web search | "Who won IPL 2024?" |
 | Delete tasks | "Delete the drink water routine" |
 | Conversational chat | "Explain machine learning simply" |

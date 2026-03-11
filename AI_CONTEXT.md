@@ -97,7 +97,7 @@ const respond = async (responseText, overrideAiMeta) => {
 ## Intent List (complete)
 
 ```
-reminder | routine | event | instant_message | chat |
+reminder | routine | interval_reminder | event | instant_message | chat |
 query_birthday | query_schedule | query_events | query_reminders | query_routines | query_contacts |
 delete_task | save_contact | web_search | unknown
 ```
@@ -123,13 +123,25 @@ These intents bypass the address book lookup entirely:
 
 ## Scheduler Logic (`scheduler.js`)
 
+### `interval_reminder` Intent
+
+- Handler: inserts N rows into `personal_reminders` with `group_name = "interval"`
+- Spacing: `intervalMinutes` apart, starting from `now + intervalMinutes`
+- Window: `durationHours` (default 8) hours from now
+- Min interval: 5 minutes
+- `query_reminders` groups these separately: shows count remaining and next fire time
+- `delete_task` deletes all matching rows by message ILIKE — clears the entire interval set
+
 ### CRON 1 — One-off reminders (`* * * * *`)
 - `.lte("reminder_time", new Date().toISOString())` — TIMESTAMPTZ comparison
 - On match: sends message, updates `status` to `'completed'`
 
 ### CRON 2 — Daily routines (`* * * * *`)
-- `.like("reminder_time", \`${timeStr}%\`)` — HH:mm prefix match
-- `timeStr` = current IST time as `HH:mm` via `Intl.DateTimeFormat("en-GB", { hour12: false })`
+- Fetches active routines where `last_fired_date IS NULL OR last_fired_date != todayIST`
+- Then compares `routine.reminder_time.slice(0,5)` (HH:MM) against current IST `timeStr` using `>=`
+- If scheduled time has passed today and not yet fired → sends message, updates `last_fired_date = todayIST`
+- **Requires schema column:** `ALTER TABLE daily_routines ADD COLUMN last_fired_date DATE;`
+- This fixes the Render sleep problem — if server restarts at 10:30 AM, a 9:00 AM routine still fires
 
 ### CRON 3 — Special events (`30 8 * * *` — 08:30 IST)
 - Runs two checks per event in same job: TODAY (celebratory) and TOMORROW (advance warning)
@@ -184,7 +196,7 @@ Handler: strips non-digits from `aiResult.phone`, validates >= 10 digits, upsert
 | :--- | :--- | :--- |
 | `contacts` | `name UNIQUE`, `phone` | Address book. Upsert on `name`. |
 | `personal_reminders` | `phone`, `message`, `reminder_time TIMESTAMPTZ`, `group_name`, `status` | `status` = `pending` / `completed` |
-| `daily_routines` | `phone`, `task_name`, `reminder_time TIME`, `is_active` | `reminder_time` stored as `HH:mm` string |
+| `daily_routines` | `phone`, `task_name`, `reminder_time TIME`, `is_active`, `last_fired_date DATE` | `last_fired_date` tracks per-day firing — prevents missed routines on server restart |
 | `special_events` | `phone`, `event_type`, `person_name`, `event_date DATE` | Year-agnostic repeat. Owner events use `person_name: "Viswanath"` not `"you"` |
 | `interaction_logs` | `sender_name`, `sender_phone`, `message`, `bot_response` | Stealth logger |
 | `api_usage` | `usage_date DATE PK`, `gemini_count`, `groq_count`, `openrouter_count`, `tavily_count`, `serper_count`, `error_count` | Auto-created by `ensureRowExists()` |
@@ -199,16 +211,10 @@ Handler: strips non-digits from `aiResult.phone`, validates >= 10 digits, upsert
   "version": "1.0.0",
   "uptime": { "days": 0, "hours": 2, "minutes": 14, "seconds": 32 },
   "limits": { "gemini": 40, "groq": 3000, "openrouter": 50, "serper": 2500, "tavily": 1000 },
-  "stats": { 
-    "gemini": 5, "groq": 0, "openrouter": 0, "serper": 0, "tavily": 12,
-    "tavilyToday": 12, "serperToday": 0,
-    "errorsToday": 0, 
-    "hourlySuccess": [0, 12, 5, ...], "hourlyErrors": [0, 0, 1, ...],
-    "historyLabels": [], "historyData": [], "errorData": [],
-    "allTimeStats": { "gemini": 150, "groq": 800, "openrouter": 12, "tavily": 45, "serper": 88 },
-    "daysTracked": 14 
-  },
-  "jobs": [ { "name": "...", "schedule": "...", "description": "...", "layman": "...", "status": "active|scheduled" } ]
+  "stats": { "gemini": 5, "groq": 0, "openrouter": 0, "serper": 0, "tavily": 12,
+             "errorsToday": 0, "historyLabels": [], "historyData": [], "errorData": [],
+             "historyRaw": [], "daysTracked": 14 },
+  "jobs": [ { "name": "...", "schedule": "...", "description": "...", "status": "active|scheduled" } ]
 }
 ```
 

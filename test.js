@@ -112,7 +112,7 @@ async function testAIParsing() {
       check: (r) => r.phone && r.phone.replace(/\D/g, "").length >= 10,
     },
     {
-      msg: "Tell Manu I will be late",
+      msg: "Tell mom I will be late",
       expect: { intent: "instant_message" },
       name: "Instant message intent",
     },
@@ -162,9 +162,16 @@ async function testAIParsing() {
       name: "Conversational chat intent",
     },
     {
-      msg: "Remind me every 5 minutes to check db",
-      expect: { intent: "chat" },
-      name: "Interval reminder rejected (not a routine)",
+      msg: "Remind me every 30 minutes to drink water",
+      expect: { intent: "interval_reminder" },
+      name: "Interval reminder intent",
+      check: (r) => parseInt(r.intervalMinutes) === 30,
+    },
+    {
+      msg: "Every 1 hour remind me to stretch for the next 4 hours",
+      expect: { intent: "interval_reminder" },
+      name: "Interval reminder with custom duration",
+      check: (r) => parseInt(r.intervalMinutes) === 60 && parseInt(r.durationHours) === 4,
     },
   ];
 
@@ -517,6 +524,75 @@ async function testDeleteTasks() {
 // API USAGE TRACKING
 // ─────────────────────────────────────────────
 
+// ─────────────────────────────────────────────
+// INTERVAL REMINDERS
+// ─────────────────────────────────────────────
+
+async function testIntervalReminders() {
+  console.log("\n\x1b[1mINTERVAL REMINDERS\x1b[0m");
+
+  const now = new Date();
+  const intervalMins = 30;
+  const durationHrs = 2;
+  const task = "interval test drink water";
+
+  // Build rows exactly as server handler does
+  const rows = [];
+  let next = new Date(now.getTime() + intervalMins * 60 * 1000);
+  const endTime = new Date(now.getTime() + durationHrs * 60 * 60 * 1000);
+  while (next <= endTime) {
+    rows.push({
+      phone: TEST_PHONE,
+      message: task,
+      reminder_time: next.toISOString(),
+      group_name: "interval",
+      status: "pending",
+    });
+    next = new Date(next.getTime() + intervalMins * 60 * 1000);
+  }
+
+  const expectedCount = rows.length; // should be 4 for 30min × 2hrs
+
+  const { error: insertErr } = await supabase.from("personal_reminders").insert(rows);
+  insertErr
+    ? log("fail", "Interval rows insert", insertErr.message)
+    : log("pass", `Interval rows insert — ${expectedCount} rows`);
+
+  // Verify all rows inserted with correct group_name
+  const { data: inserted } = await supabase
+    .from("personal_reminders")
+    .select("*")
+    .eq("phone", TEST_PHONE)
+    .eq("group_name", "interval")
+    .eq("message", task)
+    .eq("status", "pending");
+
+  const countMatch = inserted && inserted.length === expectedCount;
+  countMatch
+    ? log("pass", `Interval rows fetchable — ${inserted.length}/${expectedCount} rows with group_name=interval`)
+    : log("fail", `Interval row count mismatch — expected ${expectedCount}, got ${inserted?.length}`);
+
+  // Verify rows are in future (scheduler should not fire them yet)
+  const nowIso = new Date().toISOString();
+  const allFuture = inserted && inserted.every(r => r.reminder_time > nowIso);
+  allFuture
+    ? log("pass", "All interval rows are in future — scheduler won't fire them prematurely")
+    : log("fail", "Some interval rows are in the past — scheduler may fire them immediately");
+
+  // Verify bulk delete by message ILIKE clears all rows at once
+  const { data: deleted } = await supabase
+    .from("personal_reminders")
+    .delete()
+    .eq("phone", TEST_PHONE)
+    .eq("group_name", "interval")
+    .ilike("message", `%${task}%`)
+    .select();
+
+  deleted && deleted.length === expectedCount
+    ? log("pass", `Bulk delete clears all interval rows — ${deleted.length} removed`)
+    : log("fail", `Bulk delete incomplete — expected ${expectedCount}, got ${deleted?.length}`);
+}
+
 async function testUsageTracking() {
   console.log("\n\x1b[1mAPI USAGE TRACKING\x1b[0m");
 
@@ -566,30 +642,59 @@ async function testSchedulerLogic() {
     ? log("pass", "Reminder TIMESTAMPTZ comparison: .lte fires correctly for past reminders")
     : log("fail", "Reminder TIMESTAMPTZ comparison failed");
 
-  // Verify daily_routines TIME storage format supports scheduler prefix match
-  const timeStr = "07:30";
+  // NEW SCHEDULER LOGIC: last_fired_date + >= time comparison
+  // Test 1: routine with null last_fired_date + past time → should be found as "due"
+  const todayIST = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" }).format(new Date());
+  const currentHHMM = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit", hour12: false,
+  }).format(new Date());
+
+  // Insert routine with time = 00:01 (always past by now) and no last_fired_date
   await supabase.from("daily_routines").insert([{
     phone: TEST_PHONE,
     task_name: "Scheduler test routine",
-    reminder_time: "07:30",
+    reminder_time: "00:01",
     is_active: true,
+    last_fired_date: null,
   }]);
 
-  const { data: routines } = await supabase
+  // Simulate scheduler query: unfired today
+  const { data: unfired } = await supabase
     .from("daily_routines")
     .select("*")
     .eq("phone", TEST_PHONE)
-    .eq("is_active", true);
+    .eq("is_active", true)
+    .or(`last_fired_date.is.null,last_fired_date.neq.${todayIST}`);
 
-  const testRow = routines && routines.find(r => r.task_name === "Scheduler test routine");
-  if (testRow) {
-    const startsWithTime = testRow.reminder_time && testRow.reminder_time.startsWith(timeStr);
-    startsWithTime
-      ? log("pass", `Routine TIME stored as "${testRow.reminder_time}" — scheduler prefix "${timeStr}" will match`)
-      : log("fail", `Routine TIME stored as "${testRow.reminder_time}" — scheduler prefix "${timeStr}" won't match`);
+  const dueRow = unfired && unfired.find(r => r.task_name === "Scheduler test routine");
+  if (dueRow) {
+    const routineHHMM = dueRow.reminder_time.slice(0, 5);
+    const shouldFire = currentHHMM >= routineHHMM;
+    shouldFire
+      ? log("pass", `Overdue routine found by last_fired_date query — "${routineHHMM}" <= "${currentHHMM}" — would fire`)
+      : log("fail", `Overdue routine found but time check failed — "${routineHHMM}" vs "${currentHHMM}"`);
   } else {
-    log("fail", "Scheduler test routine not found after insert");
+    log("fail", "Overdue unfired routine not returned by scheduler query");
   }
+
+  // Test 2: after marking fired today, same routine should NOT appear in next query
+  await supabase
+    .from("daily_routines")
+    .update({ last_fired_date: todayIST })
+    .eq("phone", TEST_PHONE)
+    .eq("task_name", "Scheduler test routine");
+
+  const { data: afterFired } = await supabase
+    .from("daily_routines")
+    .select("*")
+    .eq("phone", TEST_PHONE)
+    .eq("is_active", true)
+    .or(`last_fired_date.is.null,last_fired_date.neq.${todayIST}`);
+
+  const stillDue = afterFired && afterFired.find(r => r.task_name === "Scheduler test routine");
+  !stillDue
+    ? log("pass", "Routine not returned after last_fired_date set to today — no double-fire")
+    : log("fail", "Routine still returned after last_fired_date update — double-fire risk");
 }
 
 // ─────────────────────────────────────────────
@@ -713,6 +818,7 @@ async function main() {
   await testSpecialEvents();
   await testContacts();
   await testDeleteTasks();
+  await testIntervalReminders();
   await testSchedulerLogic();
   await testUsageTracking();
   await testServerRoutes();

@@ -59,19 +59,22 @@ async function analyzeMessage(userMessage, isSummaryRequest = false) {
 - "event": Use ONLY when the user is ASKING TO SAVE or ADD a new birthday, anniversary, or special date to the database. Do NOT use this if the user explicitly asks to be "reminded" of something. 
 - "query_birthday": Use ONLY when the user is ASKING FOR INFORMATION about an existing birthday (e.g., 'When is Manu's birthday?'). Do NOT use this if they are trying to save a date.
 - "instant_message": Use to forward messages.
-- "routine" intent is ONLY for daily recurring tasks at a fixed time (e.g., "every day at 9 AM"). NOT for interval-based reminders like "every 5 minutes" or "every hour". Interval requests should be classified as "chat" with a polite explanation that only daily fixed-time routines are supported.
+- "routine" intent is ONLY for daily recurring tasks at a fixed time (e.g., "every day at 9 AM"). NOT for interval-based reminders.
+- "interval_reminder": Use when the user says "every X minutes", "every X hours", "remind me every 30 mins to drink water", etc. Extract intervalMinutes (number of minutes between each alert). taskOrMessage is the task description. durationHours is how many hours to keep repeating — default 8 if the user does not specify.
 - "delete_task" intent: extract ONLY the core task name. Strip words like "routine", "reminder", "task", "event" from taskOrMessage. Example: "Delete Drink Water routine" → taskOrMessage: "Drink Water".
 - "reminder" intent: Use whenever the user explicitly asks to be "reminded" of something, even if it includes a future date or special occasion. taskOrMessage must be the actual task description. If the user says "remind me in X minutes" with no task specified, use "reminder" as taskOrMessage.
 - Vague queries like "list all", "show everything", "what do you have" should be classified as "chat" with taskOrMessage explaining what Manvi can list (reminders, routines, events, contacts).
 
   JSON structure:
   {
-  "intent": "reminder" | "routine" | "event" | "instant_message" | "chat" | "query_birthday" | "query_schedule" | "query_routines" | "query_contacts" | "query_reminders" | "query_events" | "delete_task" | "save_contact" | "web_search" | "unknown",
+  "intent": "reminder" | "routine" | "interval_reminder" | "event" | "instant_message" | "chat" | "query_birthday" | "query_schedule" | "query_routines" | "query_contacts" | "query_reminders" | "query_events" | "delete_task" | "save_contact" | "web_search" | "unknown",
   "targetName": "you" (if message is for Viswanath, "him", "he", or "owner") OR the extracted name,
   "time": "HH:MM:SS" (24-hour format, IST timezone, or null),
   "date": "YYYY-MM-DD" (if a date is mentioned or calculable, or null),
   "taskOrMessage": "For chat intent: provide a direct response. For save_contact: the extracted name. For all others: extract the task or search query.",
-  "phone": "digits only for save_contact (no spaces, no +, no dashes), null for all others"
+  "phone": "digits only for save_contact (no spaces, no +, no dashes), null for all others",
+  "intervalMinutes": "number of minutes between repeats for interval_reminder, null for all others",
+  "durationHours": "how many hours to keep repeating for interval_reminder (default 8), null for all others"
 }
 
   Examples:
@@ -108,7 +111,13 @@ async function analyzeMessage(userMessage, isSummaryRequest = false) {
   Message: "Delete the reminder to drink water"
   JSON: {"intent": "delete_task", "targetName": "you", "time": null, "date": null, "taskOrMessage": "drink water", "phone": null}
 
-  Message: "Save Manu as 919876543210"
+  Message: "Remind me every 30 minutes to drink water"
+  JSON: {"intent": "interval_reminder", "targetName": "you", "time": null, "date": null, "taskOrMessage": "drink water", "intervalMinutes": 30, "durationHours": 8, "phone": null}
+
+  Message: "Every 1 hour remind me to stretch for the next 4 hours"
+  JSON: {"intent": "interval_reminder", "targetName": "you", "time": null, "date": null, "taskOrMessage": "stretch", "intervalMinutes": 60, "durationHours": 4, "phone": null}
+
+  Message: "Save mom as 919876543210"
   JSON: {"intent": "save_contact", "targetName": "Manu", "time": null, "date": null, "taskOrMessage": "Manu", "phone": "919876543210"}
 
   Message: "Add Dad to contacts, his number is 91 98765 43210"

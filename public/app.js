@@ -290,6 +290,10 @@ document.addEventListener("DOMContentLoaded", async () => {
                <i>${job.layman}</i>
             </div>
           </td>
+          <td class="job-last-run">${job.lastFired
+            ? `<span style="font-family:var(--mono);font-size:0.7rem;color:var(--teal)">${job.lastFired}</span>`
+            : `<span style="font-family:var(--mono);font-size:0.7rem;color:var(--text-3)">—</span>`
+          }</td>
           <td><span class="job-status ${job.status}">${job.status}</span></td>
         `;
         tbody.appendChild(tr);

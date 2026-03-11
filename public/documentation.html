@@ -491,6 +491,7 @@
         <ul class="sidebar-links">
           <li><a href="#reminders">Reminders</a></li>
           <li><a href="#routines">Daily routines</a></li>
+           <li><a href="#interval-reminders">Interval reminders</a></li>
           <li><a href="#events">Birthdays & events</a></li>
           <li><a href="#contacts">Contacts & messaging</a></li>
           <li><a href="#search">Web search</a></li>
@@ -717,10 +718,37 @@ Remind me in 20 minutes to check the oven
 
       <div class="doc-section" id="routines">
         <h2>Daily routines</h2>
-        <p>Routines repeat at the same time every day with no end date. Only a fixed daily time is supported — not intervals like "every 5 minutes".</p>
+        <p>Routines repeat at the same time every day with no end date. They run at a fixed clock time (e.g. 9:00 AM every day) until you delete them.</p>
+        <p>For repeating alerts spaced by minutes or hours, see <a href="#interval-reminders">Interval reminders</a>.</p>
         <pre><code>Remind me to drink water every day at 10 AM
 Set a daily reminder to check email at 9 AM</code></pre>
         <p>To stop a routine, delete it by name: <em>"Delete drink water routine"</em></p>
+      </div>
+
+      <div class="doc-section" id="interval-reminders">
+        <h2>Interval reminders</h2>
+        <p>Repeat an alert every X minutes or hours within a set window. Useful for hydration reminders, medication, stretch breaks, or anything that needs nudging throughout the day.</p>
+        <h3>Example messages</h3>
+        <pre><code>Remind me every 30 minutes to drink water
+Every 1 hour remind me to stretch for the next 4 hours
+Remind me every 15 mins to check on the oven for 2 hours</code></pre>
+        <h3>How it works</h3>
+        <ul>
+          <li><strong>intervalMinutes</strong> — how often the alert fires. Minimum 5 minutes.</li>
+          <li><strong>durationHours</strong> — how long to keep repeating. Defaults to 8 hours if not specified.</li>
+          <li>Manvi pre-schedules all alerts as individual rows in <code>personal_reminders</code>, so the existing scheduler picks them up automatically — no new cron job needed.</li>
+        </ul>
+        <h3>Viewing them</h3>
+        <pre><code>What are my reminders?</code></pre>
+        <p>Interval reminders appear in a separate group showing count remaining and next fire time per task.</p>
+        <h3>Cancelling them</h3>
+        <pre><code>Delete the drink water reminder
+Stop drink water intervals</code></pre>
+        <p>All pending alerts for that task are deleted in one shot — you do not need to delete them one by one.</p>
+        <div class="callout">
+          <div class="callout-title">Different from routines</div>
+          <p>Routines repeat at the same fixed time every day forever. Interval reminders repeat within a window (default 8 hours) and stop. Use routines for habits, interval reminders for tasks you want nudged throughout the day.</p>
+        </div>
       </div>
 
       <div class="doc-section" id="events">
@@ -739,11 +767,11 @@ Save Simhadri's farewell on 3rd April</code></pre>
         <h2>Contacts &amp; messaging</h2>
         <p>Save a contact once. After that, address them by name in any instruction.</p>
         <pre><code><span class="code-comment"># Save a contact</span>
-Save Manu as 919876543210
+Save mom as 919876543210
 Add Ravi to contacts, number 919988776655
 
 <span class="code-comment"># Send a message by name</span>
-Tell Manu I'll be 10 minutes late
+Tell mom I'll be 10 minutes late
 Message Ravi and say the meeting is at 7</code></pre>
         <p>Phone numbers must include the country code with no <code>+</code> or spaces. Manvi strips all non-digit characters automatically before saving.</p>
       </div>
@@ -871,7 +899,7 @@ cd src && node server.js   <span class="code-comment"># wrong — .env not found
         <p>Your <code>package.json</code> scripts point to <code>src/server.js</code>. Don't run <code>node server.js</code> from the root — use <code>npm start</code> or <code>npm run dev</code>.</p>
 
         <h3>"Contact not found in address book"</h3>
-        <p>The contact does not exist in the <code>contacts</code> table. Save them first: <em>"Save Manu as 919876543210"</em></p>
+        <p>The contact does not exist in the <code>contacts</code> table. Save them first: <em>"Save mom as 919876543210"</em></p>
 
         <h3>Reminders firing on wrong date</h3>
         <p>Make sure you specify both a date and a time. If you only specify a time, Manvi defaults to today (rolling to tomorrow if passed). For future dates, say the date explicitly.</p>
