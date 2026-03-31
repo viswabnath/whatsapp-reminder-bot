@@ -6,7 +6,7 @@ This document is the authoritative reference for AI coding assistants (Claude, C
 
 ## Project Version
 
-**v1.1** — single-owner personal WhatsApp assistant with conversational memory, recurring tasks, and edit/undo support. One `MY_PHONE_NUMBER`, one Supabase instance, one Render deployment.
+**v1.1.1** — health-aware personal WhatsApp assistant with downtime detection, job heartbeats, and continuous uptime tracking. Still single-tenant.
 
 **Roadmap direction: SaaS** — Future versions will support multiple users on a shared WhatsApp number. The current architecture is intentionally single-tenant but the DB schema is designed to support multi-tenancy (every table has a `phone` column as the tenant key). Do not make architectural decisions that would make multi-tenancy harder to add later.
 
@@ -112,6 +112,9 @@ delete_task | edit_task | save_contact | web_search | unknown
 - Vague queries ("list all", "show everything") → `chat`.
 - **MISSING TIME RULE:** `reminder`/`routine`/`event` with NO time → `chat` asking "When would you like me to set this?"
 - **VAGUE TIME DEFAULTS:** "morning" → `09:00:00`, "afternoon" → `14:00:00`, "evening"/"tonight" → `18:00:00`, "night" → `21:00:00`. AI must append resolved time to `taskOrMessage`.
+- **DOWNTIME DETECTION:** `usage.js` generates a continuous 90-day timeline. Gaps between the first record and today are marked as `status: "down"` to show red on the dashboard.
+- **JOB HEARTBEATS:** `recordHeartbeat()` in `scheduler.js` upserts to `system_jobs` and triggers `ensureRowExists()`.
+- **SELF-PINGING:** `server.js` pings `PUBLIC_URL` every 10 min to prevent Render sleep.
 
 ---
 
@@ -281,6 +284,7 @@ Always pass `date || null` as second argument.
 - `getUsage()` returns: `{ gemini, groq, openrouter, serper, tavily, errorsToday, historyLabels, historyData, errorData, historyRaw, daysTracked }`
 - Low-credit alerts at 50, 10, 0 remaining for `serper` and `tavily`
 - `track("error")` called when all 4 AI tiers fail
+- **Continuous Uptime:** `scheduler.js` calls `ensureRowExists()` via heartbeats to ensure a record exists every single day the bot is online, even if idle.
 
 ---
 
@@ -295,6 +299,17 @@ Always pass `date || null` as second argument.
 | `special_events` | `phone`, `event_type`, `person_name`, `event_date DATE` | Year-agnostic. Owner uses `person_name: "Viswanath"` |
 | `interaction_logs` | `sender_name`, `sender_phone`, `message`, `bot_response`, `created_at` | Stealth log + memory source. Always query with `.eq("sender_phone", ...)` |
 | `api_usage` | `usage_date DATE PK`, `gemini_count`, `groq_count`, `openrouter_count`, `tavily_count`, `serper_count`, `error_count` | Auto-created by `ensureRowExists()` |
+| `system_jobs` | `job_name TEXT PK`, `last_fired TIMESTAMPTZ`, `status` | Heartbeat log for health tracking |
+
+### v1.1.1 Supabase migration
+
+```sql
+CREATE TABLE system_jobs (
+    job_name TEXT PRIMARY KEY,
+    last_fired TIMESTAMPTZ,
+    status TEXT DEFAULT 'active'
+);
+```
 
 ### v1.1 Supabase migration
 
@@ -335,7 +350,7 @@ CREATE TABLE recurring_tasks (
   "uptime": { "days": 0, "hours": 2, "minutes": 14, "seconds": 32 },
   "limits": { "gemini": 40, "groq": 3000, "openrouter": 50, "serper": 2500, "tavily": 1000 },
   "stats": { "gemini": 5, "groq": 0, "openrouter": 0, "serper": 0, "tavily": 12, "errorsToday": 0, ... },
-  "jobs": [ { "name": "...", "schedule": "...", "description": "...", "status": "active|scheduled" } ]
+  "jobs": [ { "name": "...", "schedule": "...", "description": "...", "status": "active|scheduled", "lastFired": "..." } ]
 }
 ```
 

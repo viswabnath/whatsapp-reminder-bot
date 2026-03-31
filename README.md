@@ -65,6 +65,7 @@ Full setup guide — including Meta webhook configuration, Supabase schema, and 
 | `special_events` | Birthdays and anniversaries |
 | `interaction_logs` | Message log + conversational memory source |
 | `api_usage` | Daily AI/search quota tracking |
+| `system_jobs` | Background job health and heartbeat tracking *(added v1.1.1)* |
 
 ### v1.1 migration — run once in Supabase
 
@@ -81,6 +82,21 @@ CREATE TABLE recurring_tasks (
   last_fired_date  DATE,
   created_at       TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- v1.1.1: Job tracking
+CREATE TABLE system_jobs (
+    job_name TEXT PRIMARY KEY,
+    last_fired TIMESTAMPTZ,
+    status TEXT DEFAULT 'active'
+);
+
+INSERT INTO system_jobs (job_name, status)
+VALUES 
+    ('Reminder Dispatch', 'active'),
+    ('Routine Dispatch', 'active'),
+    ('Recurring Task Dispatch', 'active'),
+    ('Event Alert', 'active')
+ON CONFLICT (job_name) DO NOTHING;
 ```
 
 ---
@@ -104,6 +120,13 @@ Test suites: Supabase connectivity (7 tables), AI intent parsing (20 cases), rem
 ---
 
 ## Changelog
+
+### v1.1.1
+- **Downtime Detection:** Status dashboard now visualizes offline gaps in red — see exactly when your bot was down.
+- **Job Heartbeats:** Track "Last Run" timestamps for every background task (reminders, routines, etc.) directly on the dashboard.
+- **90-Day History:** Visual history grid now shows a full 90-day window with intelligent gap filling.
+- **Continuous Tracking:** Bot now auto-creates a daily record even on idle days to ensure true uptime history.
+- **Self-Pinging Keep-Alive:** Optional `PUBLIC_URL` setting to prevent hosting platforms (like Render) from sleeping.
 
 ### v1.1
 - **Conversational memory:** Bot reads last 4 turns from `interaction_logs` before each AI call — enables natural follow-up questions

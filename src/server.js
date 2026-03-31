@@ -9,7 +9,7 @@ const { analyzeMessage } = require("./gemini");
 const { searchWeb } = require("./search");
 const { getUsage, LIMITS } = require("./usage");
 const { version } = require("../package.json");
-require("./scheduler");
+const { getHeartbeats } = require("./scheduler");
 
 const app = express();
 app.use(express.json());
@@ -119,6 +119,53 @@ app.get("/api/status", async (req, res) => {
     const lastRoutineFired = routineFireData?.[0]?.last_fired_date || null;
     const uptimeSeconds = process.uptime();
 
+    // Fetch rich job status from DB if table exists, otherwise use in-memory heartbeats
+    const { data: dbJobs } = await supabase.from("system_jobs").select("*");
+    const heartbeats = getHeartbeats();
+
+    const jobs = [
+      {
+        name: "Webhook Listener",
+        schedule: "Event-Driven",
+        description: "Inbound message processor and AI intent router",
+        layman: "The 24/7 Receptionist: Instantly reads your message and hands it to the right department.",
+        status: "active",
+        lastFired: "Live"
+      },
+      {
+        name: "Reminder & Interval Dispatch",
+        schedule: "* * * * *",
+        description: "Fires pending one-off and interval reminders past their scheduled time",
+        layman: "The Watcher: Checks every minute for due reminders — one-off, future-dated, and repeating interval alerts.",
+        status: "scheduled",
+        lastFired: dbJobs?.find(j => j.job_name === 'Reminder Dispatch')?.last_fired || heartbeats['Reminder Dispatch']
+      },
+      {
+        name: "Routine Dispatch",
+        schedule: "* * * * *",
+        description: "Matches current IST time against active daily routines",
+        layman: "The Habits Manager: Ensures recurring daily habits never get missed.",
+        status: "scheduled",
+        lastFired: dbJobs?.find(j => j.job_name === 'Routine Dispatch')?.last_fired || heartbeats['Routine Dispatch']
+      },
+      {
+        name: "Recurring Task Dispatch",
+        schedule: "* * * * *",
+        description: "Fires weekly and monthly recurring tasks on their scheduled day and time",
+        layman: "The Calendar: Handles weekly and monthly recurring reminders like rent or trash day.",
+        status: "scheduled",
+        lastFired: dbJobs?.find(j => j.job_name === 'Recurring Task Dispatch')?.last_fired || heartbeats['Recurring Task Dispatch']
+      },
+      {
+        name: "Event Alert",
+        schedule: "30 8 * * *",
+        description: "Double-lock birthday and event alerts at 08:30 IST",
+        layman: "The Announcer: Wakes up once a day at 8:30 AM to alert you of any birthdays or anniversaries.",
+        status: "scheduled",
+        lastFired: dbJobs?.find(j => j.job_name === 'Event Alert')?.last_fired || heartbeats['Event Alert']
+      },
+    ];
+
     res.json({
       success: true,
       version,
@@ -130,43 +177,7 @@ app.get("/api/status", async (req, res) => {
       },
       limits: LIMITS,
       stats,
-      jobs: [
-        {
-          name: "Webhook Listener",
-          schedule: "Event-Driven",
-          description: "Inbound message processor and AI intent router",
-          layman: "The 24/7 Receptionist: Instantly reads your message and hands it to the right department.",
-          status: "active",
-        },
-        {
-          name: "Reminder & Interval Dispatch",
-          schedule: "* * * * *",
-          description: "Fires pending one-off and interval reminders past their scheduled time",
-          layman: "The Watcher: Checks every minute for due reminders — one-off, future-dated, and repeating interval alerts.",
-          status: "scheduled",
-        },
-        {
-          name: "Routine Dispatch",
-          schedule: "* * * * *",
-          description: "Matches current IST time against active daily routines",
-          layman: "The Habits Manager: Ensures recurring daily habits never get missed.",
-          status: "scheduled",
-        },
-        {
-          name: "Recurring Task Dispatch",
-          schedule: "* * * * *",
-          description: "Fires weekly and monthly recurring tasks on their scheduled day and time",
-          layman: "The Calendar: Handles weekly and monthly recurring reminders like rent or trash day.",
-          status: "scheduled",
-        },
-        {
-          name: "Event Alert",
-          schedule: "30 8 * * *",
-          description: "Double-lock birthday and event alerts at 08:30 IST",
-          layman: "The Announcer: Wakes up once a day at 8:30 AM to alert you of any birthdays or anniversaries.",
-          status: "scheduled",
-        },
-      ],
+      jobs,
     });
   } catch (err) {
     console.error("[status] Failed to fetch system status:", err);
@@ -753,4 +764,19 @@ app.post("/webhook", async (req, res) => {
 
 app.listen(process.env.PORT || 3000, () => {
   console.log(`[server] Manvi v${version} running on port ${process.env.PORT || 3000}`);
+
+  // Self-Pinging Keep-Alive (prevents Render sleep)
+  const PUBLIC_URL = process.env.PUBLIC_URL;
+  if (PUBLIC_URL) {
+    console.log(`[keep-alive] Self-pinging enabled for ${PUBLIC_URL}`);
+    const axios = require("axios");
+    setInterval(async () => {
+      try {
+        await axios.get(`${PUBLIC_URL}/api/ping`);
+        console.log(`[keep-alive] Heartbeat sent to ${PUBLIC_URL}`);
+      } catch (err) {
+        console.warn(`[keep-alive] Self-ping warning: ${err.message}`);
+      }
+    }, 10 * 60 * 1000); // Every 10 minutes
+  }
 });

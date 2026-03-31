@@ -2,6 +2,7 @@ require("dotenv").config();
 const cron = require("node-cron");
 const sendWhatsAppMessage = require("./sendMessage");
 const supabase = require("./supabase");
+const { ensureRowExists } = require("./usage");
 
 function getISTComponents() {
   const now = new Date();
@@ -46,6 +47,34 @@ let reminderRunning = false;
 let routineRunning = false;
 let recurringRunning = false;
 
+// Heartbeat tracking (In-memory fallback for dashboard)
+const lastHeartbeats = {
+  "Reminder Dispatch": null,
+  "Routine Dispatch": null,
+  "Recurring Task Dispatch": null,
+  "Event Alert": null
+};
+
+async function recordHeartbeat(jobName) {
+  const now = new Date().toISOString();
+  lastHeartbeats[jobName] = now;
+  
+  try {
+    // Ensure daily usage row exists (uptime visualization)
+    await ensureRowExists();
+
+    const { error } = await supabase
+      .from("system_jobs")
+      .upsert({ job_name: jobName, last_fired: now, status: "active" }, { onConflict: "job_name" });
+    
+    if (error && error.code !== 'PGRST116') {
+      // Silently fail if table doesn't exist, fallback is already in lastHeartbeats
+    }
+  } catch (e) {
+    // Silently fail
+  }
+}
+
 // CRON 1: One-off reminder dispatch — runs every minute
 cron.schedule("* * * * *", async () => {
   if (reminderRunning) return;
@@ -73,6 +102,7 @@ cron.schedule("* * * * *", async () => {
     console.error("[scheduler] Reminder cron error:", err.message);
   } finally {
     reminderRunning = false;
+    await recordHeartbeat("Reminder Dispatch");
   }
 });
 
@@ -108,6 +138,7 @@ cron.schedule("* * * * *", async () => {
     console.error("[scheduler] Routine cron error:", err.message);
   } finally {
     routineRunning = false;
+    await recordHeartbeat("Routine Dispatch");
   }
 });
 
@@ -146,6 +177,8 @@ cron.schedule("0 3 * * *", async () => {
     }
   } catch (err) {
     console.error("[scheduler] Events cron error:", err.message);
+  } finally {
+    await recordHeartbeat("Event Alert");
   }
 });
 
@@ -227,5 +260,10 @@ cron.schedule("* * * * *", async () => {
     console.error("[scheduler] Recurring tasks cron error:", err.message);
   } finally {
     recurringRunning = false;
+    await recordHeartbeat("Recurring Task Dispatch");
   }
 });
+
+module.exports = {
+  getHeartbeats: () => lastHeartbeats
+};

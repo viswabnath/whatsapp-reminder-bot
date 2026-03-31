@@ -91,34 +91,35 @@ document.addEventListener("DOMContentLoaded", async () => {
     document.getElementById("syncTime").textContent =
       `Synced: ${new Date().toLocaleTimeString()}`;
 
-    // AI status label
-    const aiStatusEl = document.getElementById("aiStatusText");
-    aiStatusEl.textContent = hasErrors ? "Degraded" : "Online";
-    aiStatusEl.style.color = hasErrors ? "var(--rose)" : "var(--green)";
-
-    // Uptime blocks (90-day history)
+    // Uptime blocks (90-day history with gap detection)
     const vizContainer = document.getElementById("uptimeViz");
-    const emptyCount = 90 - stats.daysTracked;
-
-    for (let i = 0; i < emptyCount; i++) {
-      const block = document.createElement("div");
-      block.className = "uptime-block empty";
-      block.title = "No data recorded";
-      vizContainer.appendChild(block);
-    }
+    vizContainer.innerHTML = ""; // Clear loader if any
 
     stats.historyRaw.forEach((day) => {
       const block = document.createElement("div");
-      block.className = `uptime-block ${day.error_count > 0 ? "error" : "ok"}`;
+      block.className = `uptime-block ${day.status}`;
+      
       const date = new Date(day.usage_date).toLocaleDateString("en-US", {
         weekday: "long",
         year: "numeric",
         month: "long",
         day: "numeric",
       });
-      block.title = `${date} — Errors: ${day.error_count}`;
+
+      let title = date;
+      if (day.status === "ok") title += " — Operational";
+      else if (day.status === "error") title += ` — Degraded (${day.error_count} errors)`;
+      else if (day.status === "down") title += " — Offline / No Heartbeat";
+      else title += " — No data recorded";
+
+      block.title = title;
       vizContainer.appendChild(block);
     });
+    
+    // AI status label
+    const aiStatusEl = document.getElementById("aiStatusText");
+    aiStatusEl.textContent = hasErrors ? "Degraded" : "Online";
+    aiStatusEl.style.color = hasErrors ? "var(--rose)" : "var(--green)";
 
     // --- API TIER TOGGLE LOGIC ---
     const stats24H = {

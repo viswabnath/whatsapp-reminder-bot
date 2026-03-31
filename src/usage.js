@@ -70,7 +70,34 @@ async function getUsage() {
   const sortedData = [...(allData || [])].sort(
     (a, b) => new Date(a.usage_date) - new Date(b.usage_date)
   );
-  const last7Days = sortedData.slice(-7);
+  // --- 90-DAY HISTORY WITH GAP DETECTION ---
+  const historyFull = [];
+  const oldestRecord = sortedData[0]?.usage_date || today;
+
+  for (let i = 89; i >= 0; i--) {
+    const d = new Date(Date.now() - i * 24 * 60 * 60 * 1000);
+    const dateStr = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" }).format(d);
+    
+    const record = sortedData.find((r) => r.usage_date === dateStr);
+    
+    if (record) {
+      historyFull.push({
+        usage_date: dateStr,
+        gemini_count: record.gemini_count || 0,
+        groq_count: record.groq_count || 0,
+        openrouter_count: record.openrouter_count || 0,
+        error_count: record.error_count || 0,
+        status: record.error_count > 0 ? "error" : "ok",
+      });
+    } else {
+      // If date is AFTER the first record, it's a DOWN day. Otherwise it's EMPTY (before bot started).
+      const isDown = dateStr > oldestRecord;
+      historyFull.push({
+        usage_date: dateStr,
+        status: isDown ? "down" : "empty",
+      });
+    }
+  }
 
   // --- 24-HOUR BUCKETING LOGIC ---
   const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
@@ -79,10 +106,6 @@ async function getUsage() {
     .from('interaction_logs')
     .select('created_at')
     .gte('created_at', twentyFourHoursAgo);
-
-  // system_logs table does not exist — derive hourly errors from api_usage error_count
-  // This is an approximation: errors are spread evenly across tracked hours for the day
-  const recentErrors = null;
 
   const hourlySuccess = new Array(24).fill(0);
   const hourlyErrors = new Array(24).fill(0);
@@ -95,7 +118,6 @@ async function getUsage() {
   };
 
   if (recentInteractions) recentInteractions.forEach(log => bucketLog(log.created_at, hourlySuccess));
-  if (recentErrors) recentErrors.forEach(log => bucketLog(log.created_at, hourlyErrors));
 
   return {
     gemini: daily.gemini_count || 0,
@@ -106,10 +128,10 @@ async function getUsage() {
     serper: totalSerper,
     tavily: totalTavily,
     errorsToday: daily.error_count || 0,
-    historyLabels: last7Days.map((d) => d.usage_date),
-    historyData: last7Days.map((d) => (d.gemini_count || 0) + (d.groq_count || 0) + (d.openrouter_count || 0)),
-    errorData: last7Days.map((d) => d.error_count || 0),
-    historyRaw: last7Days,
+    historyLabels: historyFull.map((d) => d.usage_date),
+    historyData: historyFull.map((d) => (d.gemini_count || 0) + (d.groq_count || 0) + (d.openrouter_count || 0)),
+    errorData: historyFull.map((d) => d.error_count || 0),
+    historyRaw: historyFull,
     daysTracked: allData?.length || 1,
     hourlySuccess: hourlySuccess,
     hourlyErrors: hourlyErrors,
@@ -135,4 +157,4 @@ async function track(service) {
   }
 }
 
-module.exports = { getUsage, track, LIMITS };
+module.exports = { getUsage, track, ensureRowExists, LIMITS };

@@ -540,7 +540,7 @@
           <p>Manvi is designed for a single owner — you. It is not a multi-tenant service. All personal data (reminders, contacts, events) is private to the WhatsApp number you configure as <code>MY_PHONE_NUMBER</code>.</p>
         </div>
 
-        <h3>What Manvi can do in v1.1</h3>
+        <h3>What Manvi can do in v1.1.1</h3>
         <div class="feat-list">
           <div class="feat-item"><div class="feat-item-title">⏰ Reminders</div><div class="feat-item-desc">One-off reminders at a specific time or on a future date. Vague times like "morning" or "evening" are resolved automatically.</div></div>
           <div class="feat-item"><div class="feat-item-title">🔁 Daily Routines</div><div class="feat-item-desc">Recurring tasks at a fixed time, every day indefinitely.</div></div>
@@ -553,6 +553,8 @@
           <div class="feat-item"><div class="feat-item-title">💬 Conversational AI</div><div class="feat-item-desc">4-tier AI waterfall for general questions and chat.</div></div>
           <div class="feat-item"><div class="feat-item-title">🗑 Delete Tasks</div><div class="feat-item-desc">Delete any reminder, routine, recurring task, or event by name.</div></div>
           <div class="feat-item"><div class="feat-item-title">🎤 Media Handling</div><div class="feat-item-desc">Voice notes, images, and other media get a clear "text only" reply instead of silently failing.</div></div>
+          <div class="feat-item"><div class="feat-item-title">🩺 Health Tracking</div><div class="feat-item-desc">Visual 90-day uptime history with downtime detection (Red/Green) and "Last Run" tracking for all background jobs.</div></div>
+          <div class="feat-item"><div class="feat-item-title">⚡️ Keep-Alive</div><div class="feat-item-desc">Built-in self-pinging mechanism to prevent hosting platforms from sleeping.</div></div>
         </div>
       </div>
 
@@ -620,6 +622,7 @@
             <tr><td><code>OPENROUTER_API_KEY</code></td><td>From <a href="https://openrouter.ai" target="_blank">OpenRouter</a>. Used for Tier 4 AI fallback.</td><td><span class="badge-required">required</span></td></tr>
             <tr><td><code>TAVILY_API_KEY</code></td><td>From <a href="https://www.tavily.com" target="_blank">Tavily</a>. Primary web search provider.</td><td><span class="badge-required">required</span></td></tr>
             <tr><td><code>SERPER_API_KEY</code></td><td>From <a href="https://serper.dev" target="_blank">Serper.dev</a>. Web search fallback.</td><td><span class="badge-required">required</span></td></tr>
+            <tr><td><code>PUBLIC_URL</code></td><td>Your application's public URL (e.g. <code>https://manvi.onrender.com</code>). Enables self-pinging keep-alive.</td><td><span>optional</span></td></tr>
           </tbody>
         </table>
       </div>
@@ -691,7 +694,7 @@
   created_at   TIMESTAMP WITH TIME ZONE <span class="code-kw">DEFAULT NOW</span>()
 );
 
-<span class="code-comment">-- Daily API usage tracking</span>
+<span class="code-comment">-- Daily API usage tracking (stores uptime history)</span>
 <span class="code-kw">CREATE TABLE</span> api_usage (
   usage_date       DATE <span class="code-kw">PRIMARY KEY</span>,
   gemini_count     INT <span class="code-kw">DEFAULT</span> 0,
@@ -700,7 +703,22 @@
   tavily_count     INT <span class="code-kw">DEFAULT</span> 0,
   serper_count     INT <span class="code-kw">DEFAULT</span> 0,
   error_count      INT <span class="code-kw">DEFAULT</span> 0
-);</code></pre>
+);
+
+<span class="code-comment">-- v1.1.1: Background job health tracking</span>
+<span class="code-kw">CREATE TABLE</span> system_jobs (
+    job_name TEXT <span class="code-kw">PRIMARY KEY</span>,
+    last_fired TIMESTAMPTZ,
+    status TEXT <span class="code-kw">DEFAULT</span> <span class="code-str">'active'</span>
+);
+
+<span class="code-kw">INSERT INTO</span> system_jobs (job_name, status)
+<span class="code-kw">VALUES</span> 
+    (<span class="code-str">'Reminder Dispatch'</span>, <span class="code-str">'active'</span>),
+    (<span class="code-str">'Routine Dispatch'</span>, <span class="code-str">'active'</span>),
+    (<span class="code-str">'Recurring Task Dispatch'</span>, <span class="code-str">'active'</span>),
+    (<span class="code-str">'Event Alert'</span>, <span class="code-str">'active'</span>)
+<span class="code-kw">ON CONFLICT</span> (job_name) <span class="code-kw">DO NOTHING</span>;</code></pre>
       </div>
       <!-- META WEBHOOK -->
       <div class="doc-section" id="meta-webhook">
@@ -893,16 +911,22 @@ I can only read text messages right now. I cannot process voice notes. Please ty
 
       <div class="doc-section" id="keepalive">
         <h2>Keep-alive &amp; uptime monitoring</h2>
-        <p>Render free instances sleep after 15 minutes of inactivity. Use <a href="https://uptimerobot.com" target="_blank">UptimeRobot</a> (free) to keep the instance awake and receive push notifications if it goes down.</p>
+        <p>Render free instances sleep after 15 minutes of inactivity. To ensure your reminders fire on time even when you aren't using the bot, use one of these methods:</p>
+        
+        <h3>Method A: Self-Pinging (Recommended)</h3>
+        <p>Manvi has a built-in keep-alive mechanism. Simply add your app's public URL to your environment variables:</p>
+        <pre><code>PUBLIC_URL=https://your-app.onrender.com</code></pre>
+        <p>The server will now ping itself every 10 minutes, preventing Render from sleeping.</p>
+
+        <h3>Method B: External Monitoring (UptimeRobot)</h3>
+        <p>Use <a href="https://uptimerobot.com" target="_blank">UptimeRobot</a> (free) for external verification and mobile push alerts if your bot goes down.</p>
         <ol>
-          <li>Create a free UptimeRobot account and install the UptimeRobot app on your phone</li>
-          <li>Go to <strong>Alert Contacts</strong> → add a <strong>Push Notification</strong> contact linked to your phone</li>
-          <li>Go to <strong>Monitors</strong> → <strong>Add New Monitor</strong></li>
-          <li>Type: <strong>HTTP(s)</strong>, URL: <code>https://your-app.onrender.com/api/ping</code></li>
-          <li>Monitoring interval: <strong>5 minutes</strong></li>
-          <li>Under Alert Contacts, select the push notification contact you created</li>
+          <li>Create a free UptimeRobot account and install the app</li>
+          <li>Add a <strong>New Monitor</strong> of type <strong>HTTP(s)</strong></li>
+          <li>URL: <code>https://your-app.onrender.com/api/ping</code></li>
+          <li>Interval: <strong>5 minutes</strong></li>
         </ol>
-        <p>The <code>/api/ping</code> endpoint returns HTTP 200 when healthy and HTTP 500 when Supabase is unreachable — UptimeRobot will alert you on either condition.</p>
+        <p>The <code>/api/ping</code> endpoint returns HTTP 200 when healthy and HTTP 500 if Supabase is unreachable.</p>
       </div>
 
       <div class="doc-section" id="testing">
@@ -985,7 +1009,7 @@ cd src && node server.js   <span class="code-comment"># wrong — .env not found
         <p>Make sure you specify both a date and a time. If you only specify a time, Manvi defaults to today (rolling to tomorrow if passed). For future dates, say the date explicitly.</p>
 
         <h3>Dashboard shows no data</h3>
-        <p>The <code>api_usage</code> table starts empty. It populates as you use the bot. The first row is created automatically on the first API call of the day.</p>
+        <p>The <code>api_usage</code> table populates as you use the bot. In v1.1.1+, a record is auto-created every day the bot is online (even if idle) to ensure your 90-day history grid remains continuous.</p>
       </div>
 
       <div class="doc-nav">
