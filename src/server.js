@@ -778,5 +778,8 @@ app.listen(process.env.PORT || 3000, () => {
         console.warn(`[keep-alive] Self-ping warning: ${err.message}`);
       }
     }, 10 * 60 * 1000); // Every 10 minutes
+  } else {
+    console.warn("[keep-alive] WARNING: PUBLIC_URL not set. The bot may go to sleep if inactive.");
+    console.warn("[keep-alive] Add PUBLIC_URL to your .env to enable self-pinging.");
   }
 });

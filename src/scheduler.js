@@ -4,6 +4,10 @@ const sendWhatsAppMessage = require("./sendMessage");
 const supabase = require("./supabase");
 const { ensureRowExists } = require("./usage");
 
+// WhatsApp Template name for automated outreach
+// This bypasses the 24-hour interaction window limit.
+const templateOptions = { templateName: "manvi_reminder" };
+
 function getISTComponents() {
   const now = new Date();
 
@@ -91,7 +95,7 @@ cron.schedule("* * * * *", async () => {
 
     if (dueReminders?.length > 0) {
       for (const reminder of dueReminders) {
-        await sendWhatsAppMessage(reminder.phone, `Reminder: ${reminder.message}`);
+        await sendWhatsAppMessage(reminder.phone, reminder.message, templateOptions);
         await supabase
           .from("personal_reminders")
           .update({ status: "completed" })
@@ -127,7 +131,7 @@ cron.schedule("* * * * *", async () => {
       const routineHHMM = routine.reminder_time.slice(0, 5);
 
       if (timeStr >= routineHHMM) {
-        await sendWhatsAppMessage(routine.phone, `Daily Routine: ${routine.task_name}`);
+        await sendWhatsAppMessage(routine.phone, routine.task_name, templateOptions);
         await supabase
           .from("daily_routines")
           .update({ last_fired_date: todayIST })
@@ -164,14 +168,16 @@ cron.schedule("0 3 * * *", async () => {
       if (eDay === todayDay && eMonth === todayMonth) {
         await sendWhatsAppMessage(
           event.phone,
-          `Today is ${event.person_name}'s ${event.event_type}. Time to reach out.`
+          `${event.person_name}'s ${event.event_type} is today.`,
+          templateOptions
         );
       }
 
       if (eDay === tomorrowDay && eMonth === tomorrowMonth) {
         await sendWhatsAppMessage(
           event.phone,
-          `Advance notice: Tomorrow is ${event.person_name}'s ${event.event_type}. Plan ahead.`
+          `${event.person_name}'s ${event.event_type} is tomorrow.`,
+          templateOptions
         );
       }
     }
@@ -249,7 +255,7 @@ cron.schedule("* * * * *", async () => {
       }
 
       if (shouldFire) {
-        await sendWhatsAppMessage(task.phone, `Reminder: ${task.task_name}`);
+        await sendWhatsAppMessage(task.phone, task.task_name, templateOptions);
         await supabase
           .from("recurring_tasks")
           .update({ last_fired_date: todayIST })
