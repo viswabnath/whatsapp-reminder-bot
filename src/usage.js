@@ -13,8 +13,14 @@ function getTodayIST() {
   return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" }).format(new Date());
 }
 
+// Cache: skip the DB check after the first successful ensure on a given calendar day.
+// Eliminates ~180 redundant reads/hour caused by cron heartbeats calling this.
+let _lastEnsuredDate = null;
+
 async function ensureRowExists() {
   const today = getTodayIST();
+  if (_lastEnsuredDate === today) return;
+
   const { data } = await supabase
     .from("api_usage")
     .select("usage_date")
@@ -32,6 +38,7 @@ async function ensureRowExists() {
       error_count: 0,
     }]);
   }
+  _lastEnsuredDate = today;
 }
 
 async function getUsage() {
@@ -39,9 +46,19 @@ async function getUsage() {
   const today = getTodayIST();
   const currentMonth = today.slice(0, 7);
 
-  const { data: allData } = await supabase.from("api_usage").select("*");
+  // Bound to last 90 days — that's all the UI ever displays
+  const ninetyDaysAgo = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" })
+    .format(new Date(Date.now() - 90 * 24 * 60 * 60 * 1000));
 
-  const daily = allData?.find((d) => d.usage_date === today) || {
+  const [{ data: recentData }, { data: serperRows }] = await Promise.all([
+    supabase.from("api_usage").select("*").gte("usage_date", ninetyDaysAgo).order("usage_date"),
+    // Serper is lifetime — needs all-time sum, but only one column
+    supabase.from("api_usage").select("serper_count"),
+  ]);
+
+  const totalSerper = serperRows?.reduce((sum, r) => sum + (r.serper_count || 0), 0) || 0;
+
+  const daily = recentData?.find((d) => d.usage_date === today) || {
     gemini_count: 0,
     groq_count: 0,
     openrouter_count: 0,
@@ -50,16 +67,11 @@ async function getUsage() {
     error_count: 0,
   };
 
-  let totalSerper = 0;
   let totalTavily = 0;
-  
-  // Track all-time sum for the UI toggle
   const allTime = { gemini: 0, groq: 0, openrouter: 0, tavily: 0, serper: 0 };
 
-  allData?.forEach((row) => {
-    totalSerper += row.serper_count || 0;
+  recentData?.forEach((row) => {
     if (row.usage_date.startsWith(currentMonth)) totalTavily += row.tavily_count || 0;
-    
     allTime.gemini += (row.gemini_count || 0);
     allTime.groq += (row.groq_count || 0);
     allTime.openrouter += (row.openrouter_count || 0);
@@ -67,19 +79,16 @@ async function getUsage() {
     allTime.serper += (row.serper_count || 0);
   });
 
-  const sortedData = [...(allData || [])].sort(
-    (a, b) => new Date(a.usage_date) - new Date(b.usage_date)
-  );
   // --- 90-DAY HISTORY WITH GAP DETECTION ---
   const historyFull = [];
-  const oldestRecord = sortedData[0]?.usage_date || today;
+  const oldestRecord = recentData?.[0]?.usage_date || today;
 
   for (let i = 89; i >= 0; i--) {
     const d = new Date(Date.now() - i * 24 * 60 * 60 * 1000);
     const dateStr = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" }).format(d);
-    
-    const record = sortedData.find((r) => r.usage_date === dateStr);
-    
+
+    const record = recentData?.find((r) => r.usage_date === dateStr);
+
     if (record) {
       historyFull.push({
         usage_date: dateStr,
@@ -90,7 +99,6 @@ async function getUsage() {
         status: record.error_count > 0 ? "error" : "ok",
       });
     } else {
-      // If date is AFTER the first record, it's a DOWN day. Otherwise it's EMPTY (before bot started).
       const isDown = dateStr > oldestRecord;
       historyFull.push({
         usage_date: dateStr,
@@ -103,9 +111,9 @@ async function getUsage() {
   const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
 
   const { data: recentInteractions } = await supabase
-    .from('interaction_logs')
-    .select('created_at')
-    .gte('created_at', twentyFourHoursAgo);
+    .from("interaction_logs")
+    .select("created_at")
+    .gte("created_at", twentyFourHoursAgo);
 
   const hourlySuccess = new Array(24).fill(0);
   const hourlyErrors = new Array(24).fill(0);
@@ -132,10 +140,10 @@ async function getUsage() {
     historyData: historyFull.map((d) => (d.gemini_count || 0) + (d.groq_count || 0) + (d.openrouter_count || 0)),
     errorData: historyFull.map((d) => d.error_count || 0),
     historyRaw: historyFull,
-    daysTracked: allData?.length || 1,
-    hourlySuccess: hourlySuccess,
-    hourlyErrors: hourlyErrors,
-    allTimeStats: allTime
+    daysTracked: recentData?.length || 1,
+    hourlySuccess,
+    hourlyErrors,
+    allTimeStats: allTime,
   };
 }
 
@@ -143,10 +151,15 @@ async function track(service) {
   await ensureRowExists();
   const today = getTodayIST();
 
-  const { data } = await supabase.from("api_usage").select(`${service}_count`).eq("usage_date", today).single();
-  const currentCount = data ? (data[`${service}_count`] || 0) : 0;
+  // Atomic increment via DB function — avoids SELECT + UPDATE race condition
+  const { error } = await supabase.rpc("increment_api_usage", { p_date: today, p_column: service });
 
-  await supabase.from("api_usage").update({ [`${service}_count`]: currentCount + 1 }).eq("usage_date", today);
+  if (error) {
+    // Fallback to SELECT + UPDATE if RPC isn't deployed yet
+    const { data } = await supabase.from("api_usage").select(`${service}_count`).eq("usage_date", today).single();
+    const currentCount = data ? (data[`${service}_count`] || 0) : 0;
+    await supabase.from("api_usage").update({ [`${service}_count`]: currentCount + 1 }).eq("usage_date", today);
+  }
 
   if (service === "serper" || service === "tavily") {
     const stats = await getUsage();

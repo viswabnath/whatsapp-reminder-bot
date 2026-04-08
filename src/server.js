@@ -1,5 +1,6 @@
 const express = require("express");
 const path = require("path");
+const crypto = require("crypto");
 const { performance } = require("perf_hooks");
 require("dotenv").config();
 
@@ -7,13 +8,56 @@ const supabase = require("./supabase");
 const sendWhatsAppMessage = require("./sendMessage");
 const { analyzeMessage } = require("./gemini");
 const { searchWeb } = require("./search");
-const { getUsage, LIMITS } = require("./usage");
+const { getUsage, ensureRowExists, LIMITS } = require("./usage");
 const { version } = require("../package.json");
 const { getHeartbeats, runReminderDispatch, runRoutineDispatch, runRecurringDispatch } = require("./scheduler");
 
 const app = express();
-app.use(express.json());
+// Capture raw body for Meta webhook signature verification
+app.use(express.json({
+  verify: (req, _res, buf) => { req.rawBody = buf; },
+}));
 app.use(express.static("public"));
+
+// ---------------------------------------------------------
+// WEBHOOK SIGNATURE VERIFICATION
+// Verifies X-Hub-Signature-256 sent by Meta on every webhook POST.
+// Set WEBHOOK_APP_SECRET to your Meta App Secret (not the access token).
+// If the env var is absent the check is skipped (dev/test convenience).
+// ---------------------------------------------------------
+function verifyWebhookSignature(req) {
+  if (!process.env.WEBHOOK_APP_SECRET) return true;
+  const sig = req.headers["x-hub-signature-256"];
+  if (!sig) return false;
+  const expected = "sha256=" + crypto
+    .createHmac("sha256", process.env.WEBHOOK_APP_SECRET)
+    .update(req.rawBody)
+    .digest("hex");
+  try {
+    return crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected));
+  } catch {
+    return false;
+  }
+}
+
+// ---------------------------------------------------------
+// PER-USER RATE LIMITING
+// Max 10 messages per user per minute (in-memory, resets on restart).
+// Protects AI quota from accidental loops or abuse.
+// ---------------------------------------------------------
+const _rateLimitMap = new Map();
+
+function isRateLimited(phone) {
+  const now = Date.now();
+  const entry = _rateLimitMap.get(phone);
+  if (!entry || now > entry.resetAt) {
+    _rateLimitMap.set(phone, { count: 1, resetAt: now + 60_000 });
+    return false;
+  }
+  if (entry.count >= 10) return true;
+  entry.count++;
+  return false;
+}
 
 // ---------------------------------------------------------
 // PAGE ROUTES
@@ -233,13 +277,13 @@ app.get("/webhook", (req, res) => {
 // MAIN WEBHOOK — Inbound message processor
 // ---------------------------------------------------------
 app.post("/webhook", async (req, res) => {
+  if (!verifyWebhookSignature(req)) return res.sendStatus(403);
   res.sendStatus(200);
 
   const messageData = req.body.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
   if (!messageData) return;
 
-  // Feature 4: Graceful media/unsupported type handling
-  // If the message has no text body, check the type and reply helpfully
+  // Graceful media/unsupported type handling
   if (!messageData?.text?.body) {
     const mediaTypes = ["audio", "image", "video", "document", "sticker"];
     const msgType = messageData.type;
@@ -259,6 +303,12 @@ app.post("/webhook", async (req, res) => {
   const message = messageData.text.body;
   const senderPhone = messageData.from;
   const lowerMsg = message.toLowerCase().trim();
+
+  // Rate limit: max 10 messages/minute per sender
+  if (isRateLimited(senderPhone)) {
+    console.warn(`[webhook] Rate limit hit for ${senderPhone}`);
+    return;
+  }
 
   // 1. CALLER ID
   let senderName = "Guest";
@@ -386,37 +436,35 @@ app.post("/webhook", async (req, res) => {
 
       const cleanTask = taskOrMessage.replace(/(routine|reminder|task|event)/gi, "").trim();
 
-      const { data: remData } = await supabase
-        .from("personal_reminders")
-        .delete()
-        .ilike("message", `%${cleanTask}%`)
-        .select();
-      if (remData?.length > 0)
-        return await respond(`Deleted reminder: "${remData[0].message}"`);
+      // Search all four tables in parallel, then delete the first match (priority order)
+      const [
+        { data: remMatches },
+        { data: routMatches },
+        { data: recurMatches },
+        { data: eventMatches },
+      ] = await Promise.all([
+        supabase.from("personal_reminders").select("id, message").ilike("message", `%${cleanTask}%`).limit(1),
+        supabase.from("daily_routines").select("id, task_name").ilike("task_name", `%${cleanTask}%`).limit(1),
+        supabase.from("recurring_tasks").select("id, task_name").ilike("task_name", `%${cleanTask}%`).limit(1),
+        supabase.from("special_events").select("id, person_name").ilike("person_name", `%${cleanTask}%`).limit(1),
+      ]);
 
-      const { data: routData } = await supabase
-        .from("daily_routines")
-        .delete()
-        .ilike("task_name", `%${cleanTask}%`)
-        .select();
-      if (routData?.length > 0)
-        return await respond(`Deleted routine: "${routData[0].task_name}"`);
-
-      const { data: recurData } = await supabase
-        .from("recurring_tasks")
-        .delete()
-        .ilike("task_name", `%${cleanTask}%`)
-        .select();
-      if (recurData?.length > 0)
-        return await respond(`Deleted recurring task: "${recurData[0].task_name}"`);
-
-      const { data: eventData } = await supabase
-        .from("special_events")
-        .delete()
-        .ilike("person_name", `%${cleanTask}%`)
-        .select();
-      if (eventData?.length > 0)
-        return await respond(`Deleted event for: "${eventData[0].person_name}"`);
+      if (remMatches?.length > 0) {
+        await supabase.from("personal_reminders").delete().eq("id", remMatches[0].id);
+        return await respond(`Deleted reminder: "${remMatches[0].message}"`);
+      }
+      if (routMatches?.length > 0) {
+        await supabase.from("daily_routines").delete().eq("id", routMatches[0].id);
+        return await respond(`Deleted routine: "${routMatches[0].task_name}"`);
+      }
+      if (recurMatches?.length > 0) {
+        await supabase.from("recurring_tasks").delete().eq("id", recurMatches[0].id);
+        return await respond(`Deleted recurring task: "${recurMatches[0].task_name}"`);
+      }
+      if (eventMatches?.length > 0) {
+        await supabase.from("special_events").delete().eq("id", eventMatches[0].id);
+        return await respond(`Deleted event for: "${eventMatches[0].person_name}"`);
+      }
 
       return await respond(`No task matching "${cleanTask}" found.`);
     }
@@ -791,8 +839,12 @@ app.post("/webhook", async (req, res) => {
   }
 });
 
-app.listen(process.env.PORT || 3000, () => {
+app.listen(process.env.PORT || 3000, async () => {
   console.log(`[server] Manvi v${version} running on port ${process.env.PORT || 3000}`);
+
+  // Eagerly create today's api_usage row so the status dashboard never marks
+  // today as "down" just because no messages have been sent yet.
+  await ensureRowExists();
 
   // Self-Ping Keep-Alive (secondary — primary reliability is cron-job.org calling /api/tick)
   // Pings /api/tick every 4 minutes so the process stays awake AND runs dispatch jobs.

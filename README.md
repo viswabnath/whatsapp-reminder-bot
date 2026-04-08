@@ -67,6 +67,21 @@ Full setup guide — including Meta webhook configuration, Supabase schema, and 
 | `api_usage` | Daily AI/search quota tracking |
 | `system_jobs` | Background job health and heartbeat tracking *(added v1.1.1)* |
 
+### v1.2.0 migration — run once in Supabase
+
+```sql
+-- Atomic counter increment for api_usage
+CREATE OR REPLACE FUNCTION increment_api_usage(p_date DATE, p_column TEXT)
+RETURNS void LANGUAGE plpgsql AS $$
+DECLARE col_name TEXT := p_column || '_count';
+BEGIN
+  EXECUTE format(
+    'UPDATE api_usage SET %I = COALESCE(%I, 0) + 1 WHERE usage_date = $1',
+    col_name, col_name
+  ) USING p_date;
+END; $$;
+```
+
 ### v1.1 migration — run once in Supabase
 
 ```sql
@@ -105,6 +120,23 @@ ON CONFLICT (job_name) DO NOTHING;
 
 See `.env.example` for the full list. Requires keys for: Meta, Supabase, Gemini, Groq, OpenRouter, Tavily, Serper.
 
+| Variable | Required | Purpose |
+|---|---|---|
+| `VERIFY_TOKEN` | Yes | Meta webhook handshake token |
+| `MY_PHONE_NUMBER` | Yes | Your WhatsApp number (digits only, no `+`) |
+| `PHONE_NUMBER_ID` | Yes | Meta App → WhatsApp → API Setup |
+| `ACCESS_TOKEN` | Yes | Meta permanent access token |
+| `SUPABASE_URL` | Yes | Supabase project URL |
+| `SUPABASE_KEY` | Yes | Supabase anon public key |
+| `GEMINI_API_KEY` | Yes | Google AI Studio |
+| `GROQ_API_KEY` | Yes | Groq console |
+| `OPENROUTER_API_KEY` | Yes | OpenRouter |
+| `TAVILY_API_KEY` | Yes | Tavily |
+| `SERPER_API_KEY` | Yes | Serper.dev |
+| `PUBLIC_URL` | Yes | Your app URL, no trailing slash — enables self-ping keep-alive |
+| `CRON_SECRET` | Yes | Protects `/api/tick` — set the same value in cron-job.org |
+| `WEBHOOK_APP_SECRET` | Recommended | Meta App Secret — enables webhook signature verification |
+
 ---
 
 ## Testing
@@ -120,6 +152,16 @@ Test suites: Supabase connectivity (7 tables), AI intent parsing (20 cases), rem
 ---
 
 ## Changelog
+
+### v1.2.0
+- **Webhook signature verification:** All incoming Meta webhooks are now verified via `X-Hub-Signature-256` using `WEBHOOK_APP_SECRET` — rejects spoofed requests
+- **Per-user rate limiting:** Max 10 messages/minute per sender — protects AI quota from loops or abuse
+- **External cron trigger:** New `GET /api/tick` endpoint (protected by `CRON_SECRET`) — called by cron-job.org every minute to run dispatch jobs regardless of process sleep state
+- **Self-ping fixed:** `PUBLIC_URL` trailing slash stripped; self-ping now calls `/api/tick` every 4 min instead of `/api/ping`
+- **Parallel delete_task:** Four sequential DB round-trips replaced with one parallel search across all tables
+- **Usage tracking optimised:** `getUsage()` bounded to last 90 days; `ensureRowExists()` cached by date (eliminates ~180 redundant DB reads/hour); `track()` uses atomic `increment_api_usage` RPC function
+- **Status dashboard fix:** AI Inference Engine label now correctly shows "Offline" when today has no heartbeat, not just "Online"/"Degraded"
+- **Startup heartbeat:** `ensureRowExists()` called at server startup — today's `api_usage` row is always created, preventing false "down" entries on idle days
 
 ### v1.1.1
 - **Downtime Detection:** Status dashboard now visualizes offline gaps in red — see exactly when your bot was down.

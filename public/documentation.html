@@ -554,7 +554,8 @@
           <div class="feat-item"><div class="feat-item-title">🗑 Delete Tasks</div><div class="feat-item-desc">Delete any reminder, routine, recurring task, or event by name.</div></div>
           <div class="feat-item"><div class="feat-item-title">🎤 Media Handling</div><div class="feat-item-desc">Voice notes, images, and other media get a clear "text only" reply instead of silently failing.</div></div>
           <div class="feat-item"><div class="feat-item-title">🩺 Health Tracking</div><div class="feat-item-desc">Visual 90-day uptime history with downtime detection (Red/Green) and "Last Run" tracking for all background jobs.</div></div>
-          <div class="feat-item"><div class="feat-item-title">⚡️ Keep-Alive</div><div class="feat-item-desc">Built-in self-pinging mechanism to prevent hosting platforms from sleeping.</div></div>
+          <div class="feat-item"><div class="feat-item-title">⚡️ Keep-Alive</div><div class="feat-item-desc">External cron trigger (<code>/api/tick</code>) called every minute by cron-job.org ensures reminders fire even after a cold restart. Self-ping every 4 minutes as secondary keep-alive.</div></div>
+          <div class="feat-item"><div class="feat-item-title">🔒 Webhook Security</div><div class="feat-item-desc">Verifies Meta's <code>X-Hub-Signature-256</code> on every incoming webhook. Per-user rate limiting (10 messages/minute) protects AI quota from abuse.</div></div>
         </div>
       </div>
 
@@ -622,7 +623,9 @@
             <tr><td><code>OPENROUTER_API_KEY</code></td><td>From <a href="https://openrouter.ai" target="_blank">OpenRouter</a>. Used for Tier 4 AI fallback.</td><td><span class="badge-required">required</span></td></tr>
             <tr><td><code>TAVILY_API_KEY</code></td><td>From <a href="https://www.tavily.com" target="_blank">Tavily</a>. Primary web search provider.</td><td><span class="badge-required">required</span></td></tr>
             <tr><td><code>SERPER_API_KEY</code></td><td>From <a href="https://serper.dev" target="_blank">Serper.dev</a>. Web search fallback.</td><td><span class="badge-required">required</span></td></tr>
-            <tr><td><code>PUBLIC_URL</code></td><td>Your application's public URL (e.g. <code>https://manvi.onrender.com</code>). Enables self-pinging keep-alive.</td><td><span>optional</span></td></tr>
+            <tr><td><code>PUBLIC_URL</code></td><td>Your application's public URL (e.g. <code>https://manvi.onrender.com</code>). Required for self-ping keep-alive — do not include a trailing slash.</td><td><span class="badge-required">required</span></td></tr>
+            <tr><td><code>CRON_SECRET</code></td><td>Any random string. Protects <code>/api/tick</code> from unauthorized calls. Must match what you set in cron-job.org.</td><td><span class="badge-required">required</span></td></tr>
+            <tr><td><code>WEBHOOK_APP_SECRET</code></td><td>Your Meta App Secret — Meta Developer Console → App → Settings → Basic → App Secret. Enables <code>X-Hub-Signature-256</code> verification on every incoming webhook.</td><td><span>recommended</span></td></tr>
           </tbody>
         </table>
       </div>
@@ -713,12 +716,27 @@
 );
 
 <span class="code-kw">INSERT INTO</span> system_jobs (job_name, status)
-<span class="code-kw">VALUES</span> 
+<span class="code-kw">VALUES</span>
     (<span class="code-str">'Reminder Dispatch'</span>, <span class="code-str">'active'</span>),
     (<span class="code-str">'Routine Dispatch'</span>, <span class="code-str">'active'</span>),
     (<span class="code-str">'Recurring Task Dispatch'</span>, <span class="code-str">'active'</span>),
     (<span class="code-str">'Event Alert'</span>, <span class="code-str">'active'</span>)
-<span class="code-kw">ON CONFLICT</span> (job_name) <span class="code-kw">DO NOTHING</span>;</code></pre>
+<span class="code-kw">ON CONFLICT</span> (job_name) <span class="code-kw">DO NOTHING</span>;
+
+<span class="code-comment">-- Atomic counter increment for api_usage (run once, required for usage tracking)</span>
+<span class="code-kw">CREATE OR REPLACE FUNCTION</span> increment_api_usage(p_date DATE, p_column TEXT)
+<span class="code-kw">RETURNS</span> void
+LANGUAGE plpgsql
+<span class="code-kw">AS</span> $$
+<span class="code-kw">DECLARE</span>
+  col_name TEXT := p_column || <span class="code-str">'_count'</span>;
+<span class="code-kw">BEGIN</span>
+  <span class="code-kw">EXECUTE</span> format(
+    <span class="code-str">'UPDATE api_usage SET %I = COALESCE(%I, 0) + 1 WHERE usage_date = $1'</span>,
+    col_name, col_name
+  ) USING p_date;
+<span class="code-kw">END</span>;
+$$;</code></pre>
       </div>
       <!-- META WEBHOOK -->
       <div class="doc-section" id="meta-webhook">
@@ -911,22 +929,26 @@ I can only read text messages right now. I cannot process voice notes. Please ty
 
       <div class="doc-section" id="keepalive">
         <h2>Keep-alive &amp; uptime monitoring</h2>
-        <p>Render free instances sleep after 15 minutes of inactivity. To ensure your reminders fire on time even when you aren't using the bot, use one of these methods:</p>
-        
-        <h3>Method A: Self-Pinging (Recommended)</h3>
-        <p>Manvi has a built-in keep-alive mechanism. Simply add your app's public URL to your environment variables:</p>
-        <pre><code>PUBLIC_URL=https://your-app.onrender.com</code></pre>
-        <p>The server will now ping itself every 10 minutes, preventing Render from sleeping.</p>
+        <p>Render free instances sleep after 15 minutes of inactivity. When sleeping, the in-process cron jobs stop ticking. The solution is two layers: an external cron trigger that runs dispatch jobs on-demand, and UptimeRobot for downtime alerting.</p>
 
-        <h3>Method B: External Monitoring (UptimeRobot)</h3>
-        <p>Use <a href="https://uptimerobot.com" target="_blank">UptimeRobot</a> (free) for external verification and mobile push alerts if your bot goes down.</p>
+        <h3>Step 1 — External cron trigger (cron-job.org)</h3>
+        <p>This is the primary reliability mechanism. <a href="https://cron-job.org" target="_blank">cron-job.org</a> (free) calls <code>/api/tick</code> every minute. This both keeps the service awake and runs the reminder/routine dispatch logic — so reminders fire even after a cold restart.</p>
         <ol>
-          <li>Create a free UptimeRobot account and install the app</li>
+          <li>Create a free account at <a href="https://cron-job.org" target="_blank">cron-job.org</a></li>
+          <li>Add a new cronjob — method: <strong>GET</strong></li>
+          <li>URL: <code>https://your-app.onrender.com/api/tick?secret=YOUR_CRON_SECRET</code></li>
+          <li>Schedule: every <strong>1 minute</strong></li>
+        </ol>
+        <p>Set <code>CRON_SECRET</code> and <code>PUBLIC_URL</code> in your Render environment variables. The server also self-pings <code>/api/tick</code> every 4 minutes as a secondary keep-alive.</p>
+
+        <h3>Step 2 — Downtime alerting (UptimeRobot)</h3>
+        <p>Use <a href="https://uptimerobot.com" target="_blank">UptimeRobot</a> (free) for mobile push alerts if your bot goes down.</p>
+        <ol>
           <li>Add a <strong>New Monitor</strong> of type <strong>HTTP(s)</strong></li>
           <li>URL: <code>https://your-app.onrender.com/api/ping</code></li>
           <li>Interval: <strong>5 minutes</strong></li>
         </ol>
-        <p>The <code>/api/ping</code> endpoint returns HTTP 200 when healthy and HTTP 500 if Supabase is unreachable.</p>
+        <p>The <code>/api/ping</code> endpoint returns HTTP 200 when healthy and HTTP 500 if Supabase is unreachable. Keep this separate from <code>/api/tick</code> — it is a pure health check, not a job trigger.</p>
       </div>
 
       <div class="doc-section" id="testing">
@@ -969,10 +991,11 @@ node test.js --suite formatter,memory,recurring</code></pre>
             <tr><td><code>GET</code></td><td><code>/</code></td><td>Landing page</td></tr>
             <tr><td><code>GET</code></td><td><code>/documentation</code></td><td>This documentation page</td></tr>
             <tr><td><code>GET</code></td><td><code>/status</code></td><td>Manvi — live system dashboard</td></tr>
-            <tr><td><code>GET</code></td><td><code>/api/ping</code></td><td>Keep-alive endpoint. Returns <code>{status, latency_ms, timestamp}</code></td></tr>
+            <tr><td><code>GET</code></td><td><code>/api/ping</code></td><td>Health check for UptimeRobot. Returns <code>{status, latency_ms, timestamp}</code>. HTTP 500 if Supabase unreachable.</td></tr>
+            <tr><td><code>GET</code></td><td><code>/api/tick?secret=…</code></td><td>External cron trigger — runs reminder, routine, and recurring task dispatch. Protected by <code>CRON_SECRET</code>. Called by cron-job.org every minute.</td></tr>
             <tr><td><code>GET</code></td><td><code>/api/status</code></td><td>Dashboard data — usage stats, uptime, limits, jobs, version</td></tr>
             <tr><td><code>GET</code></td><td><code>/webhook</code></td><td>Meta webhook verification handshake</td></tr>
-            <tr><td><code>POST</code></td><td><code>/webhook</code></td><td>Incoming WhatsApp messages — the main message handler</td></tr>
+            <tr><td><code>POST</code></td><td><code>/webhook</code></td><td>Incoming WhatsApp messages — signature-verified, rate-limited, main message handler</td></tr>
           </tbody>
         </table>
       </div>

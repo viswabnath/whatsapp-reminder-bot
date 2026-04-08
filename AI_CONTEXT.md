@@ -6,7 +6,7 @@ This document is the authoritative reference for AI coding assistants (Claude, C
 
 ## Project Version
 
-**v1.1.1** — health-aware personal WhatsApp assistant with downtime detection, job heartbeats, and continuous uptime tracking. Still single-tenant.
+**v1.2.0** — reliability and security hardening: webhook signature verification, per-user rate limiting, external cron trigger (`/api/tick`), parallel delete_task, atomic usage tracking, fixed keep-alive. Still single-tenant.
 
 **Roadmap direction: SaaS** — Future versions will support multiple users on a shared WhatsApp number. The current architecture is intentionally single-tenant but the DB schema is designed to support multi-tenancy (every table has a `phone` column as the tenant key). Do not make architectural decisions that would make multi-tenancy harder to add later.
 
@@ -16,12 +16,17 @@ This document is the authoritative reference for AI coding assistants (Claude, C
 
 ```
 WhatsApp → Meta Webhook POST /webhook
+  → server.js (X-Hub-Signature-256 verification)
   → server.js (media type guard)
+  → server.js (rate limit check — 10 msg/min per sender)
   → server.js (Caller ID)
   → interaction_logs (fetch last 4 turns for this sender)
   → gemini.js (intent analysis + history context)
   → server.js (DB execution / intent routing)
   → sendMessage.js + interaction_logs (replyAndLog)
+
+cron-job.org (every 1 min) → GET /api/tick?secret=CRON_SECRET
+  → runReminderDispatch() + runRoutineDispatch() + runRecurringDispatch() (parallel)
 ```
 
 ---
@@ -30,11 +35,11 @@ WhatsApp → Meta Webhook POST /webhook
 
 | File | Responsibility |
 | :--- | :--- |
-| `src/server.js` | Webhook entry, page routes, media guard, Caller ID, history fetch, intent router, `/api/ping`, `/api/status` |
+| `src/server.js` | Webhook entry (signature-verified, rate-limited), page routes, media guard, Caller ID, history fetch, intent router, `/api/ping`, `/api/tick`, `/api/status` |
 | `src/gemini.js` | 4-tier AI waterfall. Accepts `history[]`. Runs `formatForWhatsApp()` on summary responses. |
 | `src/search.js` | Web search — Tavily primary, Serper fallback |
-| `src/usage.js` | Self-healing daily row creation, quota reads/writes, low-credit alerts |
-| `src/scheduler.js` | 4 node-cron IST-aware jobs: one-off reminders, daily routines, special events, recurring tasks |
+| `src/usage.js` | Daily row creation (date-cached), quota reads/writes via atomic RPC, low-credit alerts |
+| `src/scheduler.js` | Exports `runReminderDispatch`, `runRoutineDispatch`, `runRecurringDispatch` — called by both cron and `/api/tick` |
 | `src/supabase.js` | Supabase client initialisation |
 | `src/sendMessage.js` | Meta WhatsApp Cloud API wrapper |
 | `public/index.html` | Landing page — **gitignored, owner-specific** |
@@ -55,10 +60,11 @@ WhatsApp → Meta Webhook POST /webhook
 | `GET` | `/` | Serves `public/index.html` |
 | `GET` | `/documentation` | Serves `public/documentation.html` |
 | `GET` | `/status` | Serves `public/status.html` |
-| `GET` | `/api/ping` | UptimeRobot keep-alive — returns `{ status, latency_ms, timestamp }` |
+| `GET` | `/api/ping` | UptimeRobot health check — returns `{ status, latency_ms, timestamp }` |
+| `GET` | `/api/tick?secret=…` | External cron trigger — runs reminder/routine/recurring dispatch. Protected by `CRON_SECRET`. |
 | `GET` | `/api/status` | Dashboard data — usage, uptime, limits, jobs, version |
 | `GET` | `/webhook` | Meta webhook verification handshake |
-| `POST` | `/webhook` | Inbound WhatsApp messages — main handler |
+| `POST` | `/webhook` | Inbound WhatsApp messages — signature-verified, rate-limited |
 
 ---
 
@@ -112,9 +118,11 @@ delete_task | edit_task | save_contact | web_search | unknown
 - Vague queries ("list all", "show everything") → `chat`.
 - **MISSING TIME RULE:** `reminder`/`routine`/`event` with NO time → `chat` asking "When would you like me to set this?"
 - **VAGUE TIME DEFAULTS:** "morning" → `09:00:00`, "afternoon" → `14:00:00`, "evening"/"tonight" → `18:00:00`, "night" → `21:00:00`. AI must append resolved time to `taskOrMessage`.
-- **DOWNTIME DETECTION:** `usage.js` generates a continuous 90-day timeline. Gaps between the first record and today are marked as `status: "down"` to show red on the dashboard.
-- **JOB HEARTBEATS:** `recordHeartbeat()` in `scheduler.js` upserts to `system_jobs` and triggers `ensureRowExists()`.
-- **SELF-PINGING:** `server.js` pings `PUBLIC_URL` every 10 min to prevent Render sleep.
+- **DOWNTIME DETECTION:** `usage.js` generates a continuous 90-day timeline. Gaps between the first record and today are marked as `status: "down"` to show red on the dashboard. Today's row is created at startup via `ensureRowExists()`.
+- **JOB HEARTBEATS:** `recordHeartbeat()` in `scheduler.js` upserts to `system_jobs` (in-memory fallback). `ensureRowExists()` is date-cached — only one DB check per calendar day.
+- **KEEP-ALIVE:** `server.js` pings `PUBLIC_URL/api/tick` every 4 min (secondary). Primary mechanism is cron-job.org calling `/api/tick` every 1 min.
+- **WEBHOOK SECURITY:** `verifyWebhookSignature()` in `server.js` uses `WEBHOOK_APP_SECRET` + `req.rawBody` (captured via `express.json({ verify })`) to validate `X-Hub-Signature-256`.
+- **RATE LIMITING:** `_rateLimitMap` in `server.js` — 10 messages/min per `senderPhone`, in-memory.
 
 ---
 
@@ -242,22 +250,22 @@ const respond = async (responseText, overrideAiMeta) => {
 // timeStr: "HH:mm"
 ```
 
-### CRON 1 — One-off reminders (`* * * * *`)
-- `.lte("reminder_time", now)` + `status=pending` → send + mark `completed`
+### Exported dispatch functions (also called by `/api/tick`)
 
-### CRON 2 — Daily routines (`* * * * *`)
-- `last_fired_date IS NULL OR != todayIST` AND `timeStr >= routineHHMM` → send + set `last_fired_date`
-- Survives Render sleep restarts
+| Function | Cron | Logic |
+|---|---|---|
+| `runReminderDispatch()` | `* * * * *` | `.lte("reminder_time", now)` + `status=pending` → send + mark `completed` |
+| `runRoutineDispatch()` | `* * * * *` | `last_fired_date IS NULL OR != todayIST` AND `timeStr >= routineHHMM` → send + set `last_fired_date` |
+| `runRecurringDispatch()` | `* * * * *` | Weekly: `day_of_week === dayOfWeek`. Monthly: `day_of_month === day`. Both: time gate + `last_fired_date` guard |
+
+Each function has a boolean guard (`reminderRunning`, etc.) to prevent overlapping executions.
 
 ### CRON 3 — Special events (`0 3 * * *` → 08:30 IST)
 - Year-agnostic day/month match for today and tomorrow
+- **Cron-only** — not exported. No idempotency guard, so calling it every minute would send duplicate alerts.
 
-### CRON 4 — Recurring tasks (`* * * * *`)
-- Queries `recurring_tasks` where `is_active=true` and not yet fired today
-- Weekly: `day_of_week === dayOfWeek` + time gate + `last_fired_date` guard
-- Monthly: `day_of_month === day` + time gate + `last_fired_date` guard
-- **End-of-month edge case:** if today is the last day of the month and `task.day_of_month > day` (e.g. task set for 31st but month only has 30 days), it fires on the last day instead of being skipped that month
-- Same double-fire protection as CRON 2
+### End-of-month edge case (recurring)
+- If today is the last day of the month and `task.day_of_month > day`, fires on the last day instead of skipping the month
 
 ### `interval_reminder`
 - Inserts N rows into `personal_reminders` with `group_name = "interval"`
@@ -279,12 +287,11 @@ Always pass `date || null` as second argument.
 
 ## Usage Tracking (`usage.js`)
 
-- `ensureRowExists()` — creates today's IST row if missing
-- `track(service)` — SELECT then UPDATE (not atomic, acceptable for single-user)
-- `getUsage()` returns: `{ gemini, groq, openrouter, serper, tavily, errorsToday, historyLabels, historyData, errorData, historyRaw, daysTracked }`
+- `ensureRowExists()` — creates today's IST row if missing. Date-cached via `_lastEnsuredDate` — only one DB check per calendar day regardless of call frequency. Also called at server startup.
+- `track(service)` — calls `increment_api_usage` RPC (atomic). Falls back to SELECT+UPDATE if RPC not deployed.
+- `getUsage()` — queries last 90 days only (not all rows). Serper all-time count fetched separately (single column). Returns `{ gemini, groq, openrouter, serper, tavily, errorsToday, historyRaw, allTimeStats, hourlySuccess, ... }`
 - Low-credit alerts at 50, 10, 0 remaining for `serper` and `tavily`
 - `track("error")` called when all 4 AI tiers fail
-- **Continuous Uptime:** `scheduler.js` calls `ensureRowExists()` via heartbeats to ensure a record exists every single day the bot is online, even if idle.
 
 ---
 
@@ -300,6 +307,20 @@ Always pass `date || null` as second argument.
 | `interaction_logs` | `sender_name`, `sender_phone`, `message`, `bot_response`, `created_at` | Stealth log + memory source. Always query with `.eq("sender_phone", ...)` |
 | `api_usage` | `usage_date DATE PK`, `gemini_count`, `groq_count`, `openrouter_count`, `tavily_count`, `serper_count`, `error_count` | Auto-created by `ensureRowExists()` |
 | `system_jobs` | `job_name TEXT PK`, `last_fired TIMESTAMPTZ`, `status` | Heartbeat log for health tracking |
+
+### v1.2.0 Supabase migration
+
+```sql
+CREATE OR REPLACE FUNCTION increment_api_usage(p_date DATE, p_column TEXT)
+RETURNS void LANGUAGE plpgsql AS $$
+DECLARE col_name TEXT := p_column || '_count';
+BEGIN
+  EXECUTE format(
+    'UPDATE api_usage SET %I = COALESCE(%I, 0) + 1 WHERE usage_date = $1',
+    col_name, col_name
+  ) USING p_date;
+END; $$;
+```
 
 ### v1.1.1 Supabase migration
 
@@ -401,7 +422,7 @@ Run: `node test.js` from project root.
 - **`save_contact` upserts on `name`** — never plain insert
 - **`edit_task` operates on `personal_reminders` only** — not routines or events
 - **`recurring_tasks` uses `last_fired_date`** — same guard pattern as `daily_routines`
-- **`delete_task` checks 4 tables** — `personal_reminders`, `daily_routines`, `recurring_tasks`, `special_events`
+- **`delete_task` searches 4 tables in parallel** — `personal_reminders`, `daily_routines`, `recurring_tasks`, `special_events`. Deletes first match in priority order.
 - **`query_routines` shows both** `daily_routines` and `recurring_tasks`
 - **`package.json` at project root** — require as `../package.json` from `src/`
 - **Owner events** — `person_name` must be `"Viswanath"` when `finalName === "you"`
@@ -441,7 +462,7 @@ Run: `node test.js` from project root.
 
 | Issue | Impact | Mitigation |
 | :--- | :--- | :--- |
-| `track()` not atomic | Race condition on double-tap | Acceptable for single-user |
+| Rate limit is in-memory | Resets on restart; no cross-process sharing | Acceptable for single-tenant |
 | Single-tenant `api_usage` | One row per day for entire instance | Per-user in v2.0 |
 | `"Viswanath"` in event handler | Wrong name for other users | DB lookup in v2.0 |
 | Uptime counter resets on restart | `process.uptime()` resets to 0 | Expected — UptimeRobot covers real downtime detection |

@@ -116,10 +116,22 @@ document.addEventListener("DOMContentLoaded", async () => {
       vizContainer.appendChild(block);
     });
     
-    // AI status label
+    // AI status label — derived from today's history entry, not just error count.
+    // "Online" requires the server to have been running today (row exists in api_usage).
+    // "Degraded" = running but had AI errors. "Offline" = no heartbeat today.
     const aiStatusEl = document.getElementById("aiStatusText");
-    aiStatusEl.textContent = hasErrors ? "Degraded" : "Online";
-    aiStatusEl.style.color = hasErrors ? "var(--rose)" : "var(--green)";
+    const todayEntry = stats.historyRaw?.[stats.historyRaw.length - 1];
+    const aiIsOffline = todayEntry?.status === "down";
+    if (aiIsOffline) {
+      aiStatusEl.textContent = "Offline";
+      aiStatusEl.style.color = "var(--rose)";
+    } else if (hasErrors) {
+      aiStatusEl.textContent = "Degraded";
+      aiStatusEl.style.color = "var(--amber, #f59e0b)";
+    } else {
+      aiStatusEl.textContent = "Online";
+      aiStatusEl.style.color = "var(--green)";
+    }
 
     // --- API TIER TOGGLE LOGIC ---
     const stats24H = {
