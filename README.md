@@ -153,6 +153,20 @@ Test suites: Supabase connectivity (7 tables), AI intent parsing (20 cases), rem
 
 ## Changelog
 
+### v1.3.0
+- **Scheduler reliability:** Atomic claim pattern in all three dispatch functions — `UPDATE WHERE status='pending' RETURNING id` before sending, so two concurrent dispatchers (cron + `/api/tick`) can never send the same reminder twice
+- **`Promise.allSettled` in `/api/tick`:** One failing dispatcher no longer blocks the other two
+- **Event alert guard:** `eventAlertRunning` flag added — consistent with all other job guards
+- **Startup warning:** Server logs a clear warning if `WEBHOOK_APP_SECRET` is not set
+- **Webhook signature hardened:** Buffer length checked before `timingSafeEqual` — no more `try/catch` needed for mismatched-length inputs
+- **Status dashboard auto-refresh:** Page now re-fetches `/api/status` every 60 seconds automatically
+- **"Synced X sec ago" counter:** Live indicator shows how stale the dashboard data is, updating every second
+- **`timeAgo()` timestamps:** Jobs table "Last Run" column now shows "3m ago" / "2h ago" instead of raw UTC ISO strings; timestamps re-render every 30 s without a network call
+- **Chart legend accuracy:** Legend line swatches now use exact chart colors (`#3b82f6` / `#f43f5e`); failures swatch shows a dashed pattern matching the chart line
+- **Toggle buttons via CSS class:** Removed all inline `style.background` writes — active state driven by `.toggle-btn.active` class
+- **Jobs table:** Technical description column removed; only the human-readable layman description is shown
+- **Test suite v1.2:** New `security` and `ratelimit` suites; atomic claim test in `scheduler` suite; `/api/tick` 403/200 checks in `routes` suite; `system_jobs` added to connectivity table check
+
 ### v1.2.0
 - **Webhook signature verification:** All incoming Meta webhooks are now verified via `X-Hub-Signature-256` using `WEBHOOK_APP_SECRET` — rejects spoofed requests
 - **Per-user rate limiting:** Max 10 messages/minute per sender — protects AI quota from loops or abuse

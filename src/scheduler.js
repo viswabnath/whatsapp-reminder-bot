@@ -50,6 +50,7 @@ function getISTComponents() {
 let reminderRunning = false;
 let routineRunning = false;
 let recurringRunning = false;
+let eventAlertRunning = false;
 
 // Heartbeat tracking (In-memory fallback for dashboard)
 const lastHeartbeats = {
@@ -92,11 +93,15 @@ async function runReminderDispatch() {
 
     if (dueReminders?.length > 0) {
       for (const reminder of dueReminders) {
-        await sendWhatsAppMessage(reminder.phone, reminder.message, templateOptions);
-        await supabase
+        // Atomic claim — prevents duplicate sends if two dispatchers run concurrently
+        const { data: claimed } = await supabase
           .from("personal_reminders")
           .update({ status: "completed" })
-          .eq("id", reminder.id);
+          .eq("id", reminder.id)
+          .eq("status", "pending")
+          .select("id");
+        if (!claimed?.length) continue;
+        await sendWhatsAppMessage(reminder.phone, reminder.message, templateOptions);
       }
     }
   } catch (err) {
@@ -126,11 +131,15 @@ async function runRoutineDispatch() {
       const routineHHMM = routine.reminder_time.slice(0, 5);
 
       if (timeStr >= routineHHMM) {
-        await sendWhatsAppMessage(routine.phone, routine.task_name, templateOptions);
-        await supabase
+        // Atomic claim — prevents duplicate sends if two dispatchers run concurrently
+        const { data: claimed } = await supabase
           .from("daily_routines")
           .update({ last_fired_date: todayIST })
-          .eq("id", routine.id);
+          .eq("id", routine.id)
+          .or(`last_fired_date.is.null,last_fired_date.neq.${todayIST}`)
+          .select("id");
+        if (!claimed?.length) continue;
+        await sendWhatsAppMessage(routine.phone, routine.task_name, templateOptions);
       }
     }
   } catch (err) {
@@ -179,11 +188,15 @@ async function runRecurringDispatch() {
       }
 
       if (shouldFire) {
-        await sendWhatsAppMessage(task.phone, task.task_name, templateOptions);
-        await supabase
+        // Atomic claim — prevents duplicate sends if two dispatchers run concurrently
+        const { data: claimed } = await supabase
           .from("recurring_tasks")
           .update({ last_fired_date: todayIST })
-          .eq("id", task.id);
+          .eq("id", task.id)
+          .or(`last_fired_date.is.null,last_fired_date.neq.${todayIST}`)
+          .select("id");
+        if (!claimed?.length) continue;
+        await sendWhatsAppMessage(task.phone, task.task_name, templateOptions);
       }
     }
   } catch (err) {
@@ -206,9 +219,10 @@ cron.schedule("* * * * *", runRoutineDispatch);
 cron.schedule("* * * * *", runRecurringDispatch);
 
 // CRON: Special event alerts — runs at 08:30 IST (03:00 UTC)
-// Kept as cron-only because it has no idempotency guard — calling it
-// every minute would send duplicate birthday alerts.
+// Kept as cron-only because calling it every minute would duplicate birthday alerts.
 cron.schedule("0 3 * * *", async () => {
+  if (eventAlertRunning) return;
+  eventAlertRunning = true;
   try {
     const { day: todayDay, month: todayMonth } = getISTComponents();
 
@@ -245,6 +259,7 @@ cron.schedule("0 3 * * *", async () => {
   } catch (err) {
     console.error("[scheduler] Events cron error:", err.message);
   } finally {
+    eventAlertRunning = false;
     await recordHeartbeat("Event Alert");
   }
 });

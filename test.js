@@ -1,7 +1,7 @@
 /**
- * Manvi v1.1 — Integration Test Suite
+ * Manvi v1.2 — Integration Test Suite
  *
- * Tests all v1.0 + v1.1 features against real Supabase instance.
+ * Tests all v1.0 + v1.1 + v1.2 features against real Supabase instance.
  * Inserts test data, verifies, and cleans up after every run.
  *
  * Usage: node test.js
@@ -84,10 +84,10 @@ async function testSupabaseConnection() {
   }
   log("pass", "Connect to Supabase");
 
-  // Verify all 7 tables exist (recurring_tasks is new in v1.1)
+  // Verify all 8 tables exist (system_jobs added in v1.1.1)
   const tables = [
     "contacts", "personal_reminders", "daily_routines",
-    "special_events", "interaction_logs", "api_usage", "recurring_tasks",
+    "special_events", "interaction_logs", "api_usage", "recurring_tasks", "system_jobs",
   ];
   for (const table of tables) {
     const { error: e } = await supabase.from(table).select("*").limit(0);
@@ -398,6 +398,41 @@ async function testSchedulerLogic() {
   !(afterFired && afterFired.find(r => r.task_name === "Scheduler test routine"))
     ? log("pass", "No double-fire after last_fired_date set")
     : log("fail", "Routine still returned after last_fired_date update");
+
+  // v1.2: Atomic claim — simulates two dispatchers racing to send the same reminder
+  const pastISO2 = new Date(Date.now() - 2000).toISOString();
+  const { data: claimSeed } = await supabase
+    .from("personal_reminders")
+    .insert([{ phone: TEST_PHONE, message: "Atomic claim test", reminder_time: pastISO2, status: "pending" }])
+    .select();
+
+  if (claimSeed && claimSeed.length > 0) {
+    const rowId = claimSeed[0].id;
+
+    // First claim: UPDATE WHERE status='pending' — should own the row
+    const { data: claim1 } = await supabase
+      .from("personal_reminders")
+      .update({ status: "completed" })
+      .eq("id", rowId)
+      .eq("status", "pending")
+      .select("id");
+    claim1?.length === 1
+      ? log("pass", "Atomic claim: first claim succeeds")
+      : log("fail", `Atomic claim: first claim failed — returned ${claim1?.length} rows`);
+
+    // Second claim: row already completed, should return 0 rows
+    const { data: claim2 } = await supabase
+      .from("personal_reminders")
+      .update({ status: "completed" })
+      .eq("id", rowId)
+      .eq("status", "pending")
+      .select("id");
+    claim2?.length === 0
+      ? log("pass", "Atomic claim: duplicate claim returns 0 rows — no double-send")
+      : log("fail", `Atomic claim: duplicate claim returned ${claim2?.length} rows — duplicate send possible`);
+  } else {
+    log("fail", "Atomic claim: could not seed test row");
+  }
 }
 
 // ─────────────────────────────────────────────
@@ -436,6 +471,32 @@ async function testServerRoutes() {
       typeof d.timestamp === "string" ? log("pass", "/api/ping: timestamp present") : log("fail", "/api/ping: timestamp missing");
     }
   } catch { log("skip", "/api/ping shape (UptimeRobot)", "server not running"); }
+
+  // v1.2: /api/tick security
+  try {
+    const res = await fetch(`${BASE}/api/tick`);
+    res.status === 403
+      ? log("pass", "/api/tick: no secret → 403")
+      : log("fail", `/api/tick: expected 403, got ${res.status}`);
+  } catch { log("skip", "/api/tick no-secret check", "server not running"); }
+
+  try {
+    const res = await fetch(`${BASE}/api/tick?secret=wrong_secret`);
+    res.status === 403
+      ? log("pass", "/api/tick: wrong secret → 403")
+      : log("fail", `/api/tick: expected 403 with wrong secret, got ${res.status}`);
+  } catch { log("skip", "/api/tick wrong-secret check", "server not running"); }
+
+  if (process.env.CRON_SECRET) {
+    try {
+      const res = await fetch(`${BASE}/api/tick?secret=${process.env.CRON_SECRET}`);
+      res.ok
+        ? log("pass", "/api/tick: correct secret → 200")
+        : log("fail", `/api/tick: expected 200 with correct secret, got ${res.status}`);
+    } catch { log("skip", "/api/tick correct-secret check", "server not running"); }
+  } else {
+    log("skip", "/api/tick correct-secret check", "CRON_SECRET not set");
+  }
 }
 
 // ─────────────────────────────────────────────
@@ -836,6 +897,113 @@ function testMediaHandling() {
 }
 
 // ─────────────────────────────────────────────
+// v1.2: WEBHOOK SECURITY
+// ─────────────────────────────────────────────
+
+function testWebhookSecurity() {
+  console.log("\n\x1b[1mWEBHOOK SECURITY (v1.2)\x1b[0m");
+
+  const crypto = require("crypto");
+
+  // Replicate server.js verifyWebhookSignature logic
+  function verifySignature(rawBody, sig, secret) {
+    if (!secret) return true;
+    if (!sig) return false;
+    const expected = "sha256=" + crypto.createHmac("sha256", secret).update(rawBody).digest("hex");
+    const sigBuf = Buffer.from(sig);
+    const expBuf = Buffer.from(expected);
+    if (sigBuf.length !== expBuf.length) return false;
+    return crypto.timingSafeEqual(sigBuf, expBuf);
+  }
+
+  // No secret set → always pass (dev mode)
+  verifySignature(Buffer.from("body"), "sha256=abc", "")
+    ? log("pass", "No secret → passes through (dev mode)")
+    : log("fail", "No secret should pass through");
+
+  // Missing signature header → reject
+  !verifySignature(Buffer.from("body"), null, "mysecret")
+    ? log("pass", "Missing sig header → rejected")
+    : log("fail", "Missing sig header should be rejected");
+
+  // Wrong signature → reject
+  !verifySignature(Buffer.from("body"), "sha256=wrongsig", "mysecret")
+    ? log("pass", "Wrong signature → rejected")
+    : log("fail", "Wrong signature should be rejected");
+
+  // Correct signature → accept
+  const body = Buffer.from('{"entry":[{"changes":[{}]}]}');
+  const secret = "test_app_secret";
+  const validSig = "sha256=" + crypto.createHmac("sha256", secret).update(body).digest("hex");
+  verifySignature(body, validSig, secret)
+    ? log("pass", "Valid HMAC signature → accepted")
+    : log("fail", "Valid HMAC signature rejected");
+
+  // Buffer length mismatch → returns false, does not throw
+  let threw = false;
+  let mismatchResult;
+  try {
+    mismatchResult = verifySignature(Buffer.from("body"), "sha256=short", "mysecret");
+  } catch {
+    threw = true;
+  }
+  !threw && mismatchResult === false
+    ? log("pass", "Buffer length mismatch → rejected without throwing")
+    : threw
+      ? log("fail", "Buffer length mismatch threw an exception — timingSafeEqual would fail in prod")
+      : log("fail", "Buffer length mismatch should return false");
+}
+
+// ─────────────────────────────────────────────
+// v1.2: RATE LIMITING
+// ─────────────────────────────────────────────
+
+function testRateLimiting() {
+  console.log("\n\x1b[1mRATE LIMITING (v1.2)\x1b[0m");
+
+  // Replicate server.js isRateLimited logic
+  const _map = new Map();
+  function isRateLimited(phone) {
+    const now = Date.now();
+    const entry = _map.get(phone);
+    if (!entry || now > entry.resetAt) {
+      _map.set(phone, { count: 1, resetAt: now + 60_000 });
+      return false;
+    }
+    if (entry.count >= 10) return true;
+    entry.count++;
+    return false;
+  }
+
+  const phone = "911234567890";
+
+  // First 10 messages: not limited
+  let allPassed = true;
+  for (let i = 0; i < 10; i++) {
+    if (isRateLimited(phone)) { allPassed = false; break; }
+  }
+  allPassed
+    ? log("pass", "First 10 messages pass through")
+    : log("fail", "Rate limit triggered before 10 messages");
+
+  // 11th message: limited
+  isRateLimited(phone)
+    ? log("pass", "11th message is rate-limited")
+    : log("fail", "11th message should be rate-limited");
+
+  // Different phone: not affected
+  !isRateLimited("919999999999")
+    ? log("pass", "Different phone is not limited")
+    : log("fail", "Rate limit leaked across phone numbers");
+
+  // After window expires: resets
+  _map.set(phone, { count: 10, resetAt: Date.now() - 1 });
+  !isRateLimited(phone)
+    ? log("pass", "Rate limit resets after window expires")
+    : log("fail", "Rate limit did not reset after window expires");
+}
+
+// ─────────────────────────────────────────────
 // MAIN
 // ─────────────────────────────────────────────
 
@@ -852,29 +1020,32 @@ function testMediaHandling() {
 // Available suite keys:
 //   connectivity | builddate | ai | reminders | routines | events | contacts |
 //   delete | interval | scheduler | usage | routes |
-//   memory | missingtime | edit | formatter | vaguedefaults | recurring | media
+//   memory | missingtime | edit | formatter | vaguedefaults | recurring | media |
+//   security | ratelimit
 // ─────────────────────────────────────────────
 
 const SUITES = {
   connectivity: { fn: testSupabaseConnection, async: true },
-  builddate: { fn: testBuildReminderDate, async: false },
-  ai: { fn: testAIParsing, async: true },
-  reminders: { fn: testReminders, async: true },
-  routines: { fn: testRoutines, async: true },
-  events: { fn: testSpecialEvents, async: true },
-  contacts: { fn: testContacts, async: true },
-  delete: { fn: testDeleteTasks, async: true },
-  interval: { fn: testIntervalReminders, async: true },
-  scheduler: { fn: testSchedulerLogic, async: true },
-  usage: { fn: testUsageTracking, async: true },
-  routes: { fn: testServerRoutes, async: true },
-  memory: { fn: testConversationalMemory, async: true },
-  missingtime: { fn: testMissingTimeUXFix, async: true },
-  edit: { fn: testEditTask, async: true },
-  formatter: { fn: testWhatsAppFormatter, async: false },
+  builddate:    { fn: testBuildReminderDate,  async: false },
+  ai:           { fn: testAIParsing,          async: true },
+  reminders:    { fn: testReminders,          async: true },
+  routines:     { fn: testRoutines,           async: true },
+  events:       { fn: testSpecialEvents,      async: true },
+  contacts:     { fn: testContacts,           async: true },
+  delete:       { fn: testDeleteTasks,        async: true },
+  interval:     { fn: testIntervalReminders,  async: true },
+  scheduler:    { fn: testSchedulerLogic,     async: true },
+  usage:        { fn: testUsageTracking,      async: true },
+  routes:       { fn: testServerRoutes,       async: true },
+  memory:       { fn: testConversationalMemory, async: true },
+  missingtime:  { fn: testMissingTimeUXFix,   async: true },
+  edit:         { fn: testEditTask,           async: true },
+  formatter:    { fn: testWhatsAppFormatter,  async: false },
   vaguedefaults: { fn: testVagueTimeDefaults, async: true },
-  recurring: { fn: testRecurringTasks, async: true },
-  media: { fn: testMediaHandling, async: false },
+  recurring:    { fn: testRecurringTasks,     async: true },
+  media:        { fn: testMediaHandling,      async: false },
+  security:     { fn: testWebhookSecurity,    async: false },
+  ratelimit:    { fn: testRateLimiting,       async: false },
 };
 
 async function main() {
@@ -901,7 +1072,7 @@ async function main() {
   const label = filterKeys ? `Suites: ${filterKeys.join(", ")}` : "Full Suite";
 
   console.log("\n\x1b[1m\x1b[36m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\x1b[0m");
-  console.log(`\x1b[1m\x1b[36m  Manvi v1.1 — Integration Test Suite\x1b[0m`);
+  console.log(`\x1b[1m\x1b[36m  Manvi v1.2 — Integration Test Suite\x1b[0m`);
   console.log(`\x1b[1m\x1b[36m  ${label}\x1b[0m`);
   console.log("\x1b[1m\x1b[36m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\x1b[0m");
 

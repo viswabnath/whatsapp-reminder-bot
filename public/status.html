@@ -453,11 +453,35 @@
     }
 
     .legend-item.blue::before {
-      background: var(--blue);
+      background: #3b82f6;
     }
 
+    /* Dashed pattern matches the failures line in the chart */
     .legend-item.rose::before {
-      background: var(--rose);
+      background: repeating-linear-gradient(
+        to right,
+        #f43f5e 0px, #f43f5e 4px,
+        transparent 4px, transparent 8px
+      );
+    }
+
+    /* Toggle buttons */
+    .toggle-btn {
+      font-family: var(--mono);
+      font-size: 0.65rem;
+      padding: 0.2rem 0.6rem;
+      border-radius: 4px;
+      border: none;
+      background: transparent;
+      color: var(--text-2);
+      cursor: pointer;
+      font-weight: 600;
+      transition: background 0.1s, color 0.1s;
+    }
+
+    .toggle-btn.active {
+      background: var(--bg-2);
+      color: var(--text-1);
     }
 
     /* JOBS */
@@ -673,11 +697,8 @@
       <div class="section-label" style="margin-bottom: 0;">API Usage Quotas</div>
       <div class="chart-toggle"
         style="display: flex; gap: 0.25rem; background: var(--bg-3); padding: 0.25rem; border-radius: 6px; border: 1px solid var(--border);">
-        <button id="btnTier24h" class="toggle-btn active"
-          style="font-family: var(--mono); font-size: 0.65rem; padding: 0.2rem 0.6rem; border-radius: 4px; border: none; background: var(--bg-2); color: var(--text-1); cursor: pointer; font-weight: 600;">24H</button>
-        <button id="btnTierAll" class="toggle-btn"
-          style="font-family: var(--mono); font-size: 0.65rem; padding: 0.2rem 0.6rem; border-radius: 4px; border: none; background: transparent; color: var(--text-2); cursor: pointer; font-weight: 600;">ALL
-          TIME</button>
+        <button id="btnTier24h" class="toggle-btn active">24H</button>
+        <button id="btnTierAll" class="toggle-btn">ALL TIME</button>
       </div>
     </div>
 
@@ -733,10 +754,8 @@
         <div class="section-label" style="margin-bottom: 0;">Request Volume</div>
         <div class="chart-toggle"
           style="display: flex; gap: 0.25rem; background: var(--bg-3); padding: 0.25rem; border-radius: 6px; border: 1px solid var(--border);">
-          <button id="btn24h" class="toggle-btn active"
-            style="font-family: var(--mono); font-size: 0.65rem; padding: 0.2rem 0.6rem; border-radius: 4px; border: none; background: var(--bg-2); color: var(--text-1); cursor: pointer; font-weight: 600;">24H</button>
-          <button id="btn7d" class="toggle-btn"
-            style="font-family: var(--mono); font-size: 0.65rem; padding: 0.2rem 0.6rem; border-radius: 4px; border: none; background: transparent; color: var(--text-2); cursor: pointer; font-weight: 600;">7D</button>
+          <button id="btn24h" class="toggle-btn active">24H</button>
+          <button id="btn7d" class="toggle-btn">7D</button>
         </div>
       </div>
       <div class="chart-legend">

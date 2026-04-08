@@ -33,11 +33,10 @@ function verifyWebhookSignature(req) {
     .createHmac("sha256", process.env.WEBHOOK_APP_SECRET)
     .update(req.rawBody)
     .digest("hex");
-  try {
-    return crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected));
-  } catch {
-    return false;
-  }
+  const sigBuf = Buffer.from(sig);
+  const expBuf = Buffer.from(expected);
+  if (sigBuf.length !== expBuf.length) return false;
+  return crypto.timingSafeEqual(sigBuf, expBuf);
 }
 
 // ---------------------------------------------------------
@@ -163,8 +162,9 @@ app.get("/api/tick", async (req, res) => {
     return res.sendStatus(403);
   }
 
-  // Run all dispatchers — they have internal guard flags, so safe to call in parallel
-  await Promise.all([
+  // Run all dispatchers in parallel — guard flags prevent overlaps, allSettled ensures one failure
+  // doesn't block the others
+  await Promise.allSettled([
     runReminderDispatch(),
     runRoutineDispatch(),
     runRecurringDispatch(),
@@ -841,6 +841,10 @@ app.post("/webhook", async (req, res) => {
 
 app.listen(process.env.PORT || 3000, async () => {
   console.log(`[server] Manvi v${version} running on port ${process.env.PORT || 3000}`);
+
+  if (!process.env.WEBHOOK_APP_SECRET) {
+    console.warn("[security] WARNING: WEBHOOK_APP_SECRET not set. Webhook signature verification is disabled.");
+  }
 
   // Eagerly create today's api_usage row so the status dashboard never marks
   // today as "down" just because no messages have been sent yet.
