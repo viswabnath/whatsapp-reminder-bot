@@ -236,8 +236,8 @@ document.addEventListener("DOMContentLoaded", () => {
       const data = await response.json();
       if (!data.success) throw new Error("API returned failure");
 
-      const { stats, limits, uptime, jobs, version } = data;
-      const hasErrors = stats.errorsToday > 0;
+      const { stats, limits, uptime, jobs, version, cronHealthy } = data;
+      const hasErrors = stats.errorsToday > 0 || cronHealthy === false;
 
       // Version
       document.getElementById("versionBadge").textContent = `v${version}`;
@@ -248,7 +248,7 @@ document.addEventListener("DOMContentLoaded", () => {
       const statusText = document.getElementById("statusText");
       badge.className      = `status-badge ${hasErrors ? "error" : "ok"}`;
       statusDot.className  = `status-dot ${hasErrors ? "err" : "ok pulse"}`;
-      statusText.textContent = hasErrors ? "Degraded" : "Operational";
+      statusText.textContent = cronHealthy === false ? "Cron Stalled" : hasErrors ? "Degraded" : "Operational";
 
       // Uptime — reset to server value on each refresh so client counter stays accurate
       totalSeconds = uptime.days * 86400 + uptime.hours * 3600 + uptime.minutes * 60 + uptime.seconds;

@@ -12,6 +12,14 @@ const { getUsage, ensureRowExists, LIMITS } = require("./usage");
 const { version } = require("../package.json");
 const { getHeartbeats, runReminderDispatch, runRoutineDispatch, runRecurringDispatch } = require("./scheduler");
 
+// Prevent unhandled rejections/exceptions from crashing the process and killing cron jobs
+process.on("uncaughtException", (err) => {
+  console.error("[process] Uncaught exception:", err);
+});
+process.on("unhandledRejection", (reason) => {
+  console.error("[process] Unhandled rejection:", reason);
+});
+
 const app = express();
 // Capture raw body for Meta webhook signature verification
 app.use(express.json({
@@ -196,6 +204,18 @@ app.get("/api/status", async (req, res) => {
     const { data: dbJobs } = await supabase.from("system_jobs").select("*");
     const heartbeats = getHeartbeats();
 
+    // Cron health: minute-level jobs must have fired within 10 minutes.
+    // Skip check if process just started (< 10 min uptime) — first tick hasn't fired yet.
+    const CRON_STALE_MS = 10 * 60 * 1000;
+    const now = Date.now();
+    const minuteJobNames = ["Reminder Dispatch", "Routine Dispatch", "Recurring Task Dispatch"];
+    const cronHealthy = uptimeSeconds < 600
+      ? true
+      : minuteJobNames.every((name) => {
+          const ts = dbJobs?.find(j => j.job_name === name)?.last_fired || heartbeats[name];
+          return ts && (now - new Date(ts).getTime()) < CRON_STALE_MS;
+        });
+
     const jobs = [
       {
         name: "Webhook Listener",
@@ -251,6 +271,7 @@ app.get("/api/status", async (req, res) => {
       limits: LIMITS,
       stats,
       jobs,
+      cronHealthy,
     });
   } catch (err) {
     console.error("[status] Failed to fetch system status:", err);
@@ -279,6 +300,8 @@ app.get("/webhook", (req, res) => {
 app.post("/webhook", async (req, res) => {
   if (!verifyWebhookSignature(req)) return res.sendStatus(403);
   res.sendStatus(200);
+
+  try {
 
   const messageData = req.body.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
   if (!messageData) return;
@@ -836,6 +859,10 @@ app.post("/webhook", async (req, res) => {
   } catch (err) {
     console.error("[webhook] Routing error:", err);
     await respond("Internal error. Please try again.");
+  }
+
+  } catch (err) {
+    console.error("[webhook] Unhandled error:", err);
   }
 });
 
