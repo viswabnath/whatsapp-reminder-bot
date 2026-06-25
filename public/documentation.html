@@ -10,15 +10,15 @@
   <meta name="author" content="Viswanath Bodasakurthi | OneMark">
 
   <meta property="og:type" content="article">
-  <meta property="og:url" content="https://manvi.onrender.com/documentation">
+  <meta property="og:url" content="https://manvi-bot.vercel.app/documentation">
   <meta property="og:title" content="Documentation | Manvi">
   <meta property="og:description" content="Official documentation for Manvi. Learn how to self-host, configure, and use your personal AI WhatsApp assistant.">
-  <meta property="og:image" content="https://manvi.onrender.com/preview-image.jpg">
+  <meta property="og:image" content="https://manvi-bot.vercel.app/preview-image.jpg">
   
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:title" content="Documentation | Manvi">
   <meta name="twitter:description" content="Learn how to self-host and configure your Manvi instance.">
-  <meta name="twitter:image" content="https://manvi.onrender.com/preview-image.jpg">
+  <meta name="twitter:image" content="https://manvi-bot.vercel.app/preview-image.jpg">
 
   <link rel="icon" type="image/png" href="/assets/favicon-onemark/favicon-96x96.png" sizes="96x96" />
   <link rel="icon" type="image/svg+xml" href="/assets/favicon-onemark/favicon.svg" />
@@ -623,7 +623,7 @@
             <tr><td><code>OPENROUTER_API_KEY</code></td><td>From <a href="https://openrouter.ai" target="_blank">OpenRouter</a>. Used for Tier 4 AI fallback.</td><td><span class="badge-required">required</span></td></tr>
             <tr><td><code>TAVILY_API_KEY</code></td><td>From <a href="https://www.tavily.com" target="_blank">Tavily</a>. Primary web search provider.</td><td><span class="badge-required">required</span></td></tr>
             <tr><td><code>SERPER_API_KEY</code></td><td>From <a href="https://serper.dev" target="_blank">Serper.dev</a>. Web search fallback.</td><td><span class="badge-required">required</span></td></tr>
-            <tr><td><code>PUBLIC_URL</code></td><td>Your application's public URL (e.g. <code>https://manvi.onrender.com</code>). Required for self-ping keep-alive — do not include a trailing slash.</td><td><span class="badge-required">required</span></td></tr>
+            <tr><td><code>PUBLIC_URL</code></td><td>Your application's public URL (e.g. <code>https://manvi-bot.vercel.app</code>). Required for self-ping keep-alive — do not include a trailing slash.</td><td><span class="badge-required">required</span></td></tr>
             <tr><td><code>CRON_SECRET</code></td><td>Any random string. Protects <code>/api/tick</code> from unauthorized calls. Must match what you set in cron-job.org.</td><td><span class="badge-required">required</span></td></tr>
             <tr><td><code>WEBHOOK_APP_SECRET</code></td><td>Your Meta App Secret — Meta Developer Console → App → Settings → Basic → App Secret. Enables <code>X-Hub-Signature-256</code> verification on every incoming webhook.</td><td><span>recommended</span></td></tr>
           </tbody>
@@ -743,7 +743,7 @@ $$;</code></pre>
         <h2>Meta webhook setup</h2>
         <p>In the Meta developer portal, go to your app → WhatsApp → Configuration.</p>
         <ol>
-          <li>Set <strong>Webhook URL</strong> to <code>https://your-app.onrender.com/webhook</code></li>
+          <li>Set <strong>Webhook URL</strong> to <code>https://manvi-bot.vercel.app/webhook</code></li>
           <li>Set <strong>Verify token</strong> to the same value as your <code>VERIFY_TOKEN</code> env var</li>
           <li>Subscribe to the <strong>messages</strong> webhook field</li>
           <li>Add your phone number as a test recipient in the API Setup section</li>
@@ -919,7 +919,7 @@ I can only read text messages right now. I cannot process voice notes. Please ty
           <li>Set <strong>Build command</strong>: <code>npm install</code></li>
           <li>Set <strong>Start command</strong>: <code>npm start</code></li>
           <li>Add all environment variables in the Render <strong>Environment</strong> tab</li>
-          <li>Deploy. Your URL will be <code>https://your-app.onrender.com</code></li>
+          <li>Deploy. Your URL will be <code>https://manvi-bot.vercel.app</code></li>
         </ol>
         <div class="callout">
           <div class="callout-title">Free tier sleep</div>
@@ -936,7 +936,7 @@ I can only read text messages right now. I cannot process voice notes. Please ty
         <ol>
           <li>Create a free account at <a href="https://cron-job.org" target="_blank">cron-job.org</a></li>
           <li>Add a new cronjob — method: <strong>GET</strong></li>
-          <li>URL: <code>https://your-app.onrender.com/api/tick?secret=YOUR_CRON_SECRET</code></li>
+          <li>URL: <code>https://manvi-bot.vercel.app/api/tick?secret=YOUR_CRON_SECRET</code></li>
           <li>Schedule: every <strong>1 minute</strong></li>
         </ol>
         <p>Set <code>CRON_SECRET</code> and <code>PUBLIC_URL</code> in your Render environment variables. The server also self-pings <code>/api/tick</code> every 4 minutes as a secondary keep-alive.</p>
@@ -945,7 +945,7 @@ I can only read text messages right now. I cannot process voice notes. Please ty
         <p>Use <a href="https://uptimerobot.com" target="_blank">UptimeRobot</a> (free) for mobile push alerts if your bot goes down.</p>
         <ol>
           <li>Add a <strong>New Monitor</strong> of type <strong>HTTP(s)</strong></li>
-          <li>URL: <code>https://your-app.onrender.com/api/ping</code></li>
+          <li>URL: <code>https://manvi-bot.vercel.app/api/ping</code></li>
           <li>Interval: <strong>5 minutes</strong></li>
         </ol>
         <p>The <code>/api/ping</code> endpoint returns HTTP 200 when healthy and HTTP 500 if Supabase is unreachable. Keep this separate from <code>/api/tick</code> — it is a pure health check, not a job trigger.</p>
