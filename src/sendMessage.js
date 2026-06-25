@@ -1,5 +1,6 @@
 const axios = require("axios");
 require("dotenv").config();
+const { getAccessToken } = require("./metaToken");
 
 /**
  * Sends an outbound WhatsApp message via the Meta Cloud API.
@@ -19,8 +20,9 @@ async function sendWhatsAppMessage(phone, message, options = {}) {
   const { templateName, languageCode = "en_US" } = options;
 
   const url = `https://graph.facebook.com/v19.0/${process.env.PHONE_NUMBER_ID}/messages`;
+  const token = await getAccessToken();
   const headers = {
-    Authorization: `Bearer ${process.env.ACCESS_TOKEN}`,
+    Authorization: `Bearer ${token}`,
     "Content-Type": "application/json",
   };
 

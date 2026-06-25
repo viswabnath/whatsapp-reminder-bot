@@ -3,6 +3,7 @@ const cron = require("node-cron");
 const sendWhatsAppMessage = require("./sendMessage");
 const supabase = require("./supabase");
 const { ensureRowExists } = require("./usage");
+const { refreshAccessTokenIfNeeded } = require("./metaToken");
 
 function getISTComponents() {
   const now = new Date();
@@ -67,6 +68,16 @@ async function recordHeartbeat(jobName) {
 }
 
 // -----------------------------------------------------------------------
+// Template send — bypasses the WhatsApp 24-hour messaging window.
+// Set REMINDER_TEMPLATE_NAME in env to the approved template name.
+// Falls back to plain text if not configured (requires active 24h window).
+// -----------------------------------------------------------------------
+function scheduledSend(phone, message) {
+  const templateName = process.env.REMINDER_TEMPLATE_NAME;
+  return sendWhatsAppMessage(phone, message, templateName ? { templateName } : {});
+}
+
+// -----------------------------------------------------------------------
 // Exported dispatch functions — called by both cron AND /api/tick
 // -----------------------------------------------------------------------
 
@@ -94,8 +105,9 @@ async function runReminderDispatch() {
       if (!claimed?.length) continue;
 
       try {
-        await sendWhatsAppMessage(reminder.phone, reminder.message);
-      } catch (_) {
+        await scheduledSend(reminder.phone, reminder.message);
+      } catch (err) {
+        console.error(`[scheduler] reminder ${reminder.id} send failed:`, err?.response?.data || err.message);
         // Revert so it retries next cycle
         await supabase.from("personal_reminders").update({ status: "pending" }).eq("id", reminder.id);
       }
@@ -133,8 +145,9 @@ async function runRoutineDispatch() {
       if (!claimed?.length) continue;
 
       try {
-        await sendWhatsAppMessage(routine.phone, routine.task_name);
-      } catch (_) {
+        await scheduledSend(routine.phone, routine.task_name);
+      } catch (err) {
+        console.error(`[scheduler] routine ${routine.id} send failed:`, err?.response?.data || err.message);
         await supabase.from("daily_routines").update({ last_fired_date: null }).eq("id", routine.id);
       }
     }
@@ -184,8 +197,9 @@ async function runRecurringDispatch() {
       if (!claimed?.length) continue;
 
       try {
-        await sendWhatsAppMessage(task.phone, task.task_name);
-      } catch (_) {
+        await scheduledSend(task.phone, task.task_name);
+      } catch (err) {
+        console.error(`[scheduler] recurring task ${task.id} send failed:`, err?.response?.data || err.message);
         await supabase.from("recurring_tasks").update({ last_fired_date: null }).eq("id", task.id);
       }
     }
@@ -227,11 +241,13 @@ cron.schedule("0 3 * * *", async () => {
       const eMonth = eDate.getMonth() + 1;
 
       if (eDay === todayDay && eMonth === todayMonth) {
-        await sendWhatsAppMessage(event.phone, `${event.person_name}'s ${event.event_type} is today.`);
+        await scheduledSend(event.phone, `${event.person_name}'s ${event.event_type} is today.`);
       } else if (eDay === tomorrowDay && eMonth === tomorrowMonth) {
-        await sendWhatsAppMessage(event.phone, `${event.person_name}'s ${event.event_type} is tomorrow.`);
+        await scheduledSend(event.phone, `${event.person_name}'s ${event.event_type} is tomorrow.`);
       }
     }
+    // Also check and refresh the Meta access token if expiry is near
+    await refreshAccessTokenIfNeeded();
   } catch (_) {
     // silent
   } finally {

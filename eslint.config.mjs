@@ -12,6 +12,8 @@ export default [
         console: "readonly",
         setTimeout: "readonly",
         clearTimeout: "readonly",
+        setInterval: "readonly",
+        clearInterval: "readonly",
         performance: "readonly",
         fetch: "readonly",
         Buffer: "readonly",

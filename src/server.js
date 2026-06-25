@@ -54,6 +54,14 @@ function verifyWebhookSignature(req) {
 // ---------------------------------------------------------
 const _rateLimitMap = new Map();
 
+// Purge expired rate-limit entries every 5 minutes to prevent unbounded map growth
+setInterval(() => {
+  const now = Date.now();
+  for (const [phone, entry] of _rateLimitMap) {
+    if (now > entry.resetAt) _rateLimitMap.delete(phone);
+  }
+}, 5 * 60 * 1000);
+
 function isRateLimited(phone) {
   const now = Date.now();
   const entry = _rateLimitMap.get(phone);
@@ -411,10 +419,11 @@ app.post("/webhook", async (req, res) => {
 
   if (targetName && targetName.toLowerCase() !== "you") {
     if (!queryOnlyIntents.includes(intent)) {
+      const safeName = targetName.replace(/[%_]/g, "\\$&");
       const { data: contact } = await supabase
         .from("contacts")
         .select("*")
-        .ilike("name", targetName)
+        .ilike("name", safeName)
         .single();
 
       if (contact) {
@@ -787,6 +796,7 @@ app.post("/webhook", async (req, res) => {
     }
 
     if (intent === "instant_message") {
+      if (!isOwner) return await respond("Access denied.");
       if (finalName.toLowerCase() === "you") {
         await sendWhatsAppMessage(
           process.env.MY_PHONE_NUMBER,
@@ -888,7 +898,7 @@ app.listen(process.env.PORT || 3000, async () => {
     const axios = require("axios");
     setInterval(async () => {
       try {
-        await axios.get(`${PUBLIC_URL}/api/tick?secret=${CRON_SECRET}`);
+        await axios.get(`${PUBLIC_URL}/api/tick`, { headers: { "x-cron-secret": CRON_SECRET } });
       } catch (err) {
         console.warn(`[keep-alive] Self-ping warning: ${err.message}`);
       }
