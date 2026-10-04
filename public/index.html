@@ -28,7 +28,7 @@
   <link rel="manifest" href="/assets/favicon-onemark/site.webmanifest" />
 
   <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,300&display=swap" rel="stylesheet"><style>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,300&family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20..48,400,0,0&display=swap" rel="stylesheet"><style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
     :root {
@@ -429,7 +429,10 @@
       align-items: center;
       justify-content: center;
       margin-bottom: 1rem;
-      font-size: 1.1rem;
+      color: var(--green-dark);
+      font-family: 'Material Symbols Rounded';
+      font-size: 1.25rem;
+      line-height: 1;
     }
 
     .feature-title {
@@ -900,37 +903,37 @@
 
       <div class="features-grid">
         <div class="feature-card reveal">
-          <div class="feature-icon">⏰</div>
+          <div class="feature-icon material-symbols-rounded" aria-hidden="true">schedule</div>
           <div class="feature-title">Reminders</div>
           <div class="feature-desc">One-off or future-dated. Set a reminder in plain English — exact time, relative time, or a specific date. Manvi fires it at the right moment over WhatsApp.</div>
           <div class="feature-example">"Remind me to check the oven in 20 minutes"</div>
         </div>
         <div class="feature-card reveal" style="transition-delay:0.05s">
-          <div class="feature-icon">🔁</div>
+          <div class="feature-icon material-symbols-rounded" aria-hidden="true">routine</div>
           <div class="feature-title">Daily Routines</div>
           <div class="feature-desc">Set a recurring task at a fixed time and it runs every day automatically — no expiry, no end date, until you delete it.</div>
           <div class="feature-example">"Remind me to drink water every day at 10 AM"</div>
         </div>
         <div class="feature-card reveal" style="transition-delay:0.1s">
-          <div class="feature-icon">🎂</div>
+          <div class="feature-icon material-symbols-rounded" aria-hidden="true">cake</div>
           <div class="feature-title">Birthdays & Events</div>
           <div class="feature-desc">Save a date once, get reminded every year. Manvi sends an advance alert the day before and a fresh alert on the day itself at 8:30 AM.</div>
           <div class="feature-example">"22nd May is Manu's birthday"</div>
         </div>
         <div class="feature-card reveal" style="transition-delay:0.15s">
-          <div class="feature-icon">🔍</div>
+          <div class="feature-icon material-symbols-rounded" aria-hidden="true">search</div>
           <div class="feature-title">Web Search</div>
           <div class="feature-desc">Ask anything current. Manvi searches the web via Tavily (with Serper as fallback) and returns a clean, concise summary — no links, no fluff.</div>
           <div class="feature-example">"Who won the match last night?"</div>
         </div>
         <div class="feature-card reveal" style="transition-delay:0.2s">
-          <div class="feature-icon">📇</div>
+          <div class="feature-icon material-symbols-rounded" aria-hidden="true">contacts</div>
           <div class="feature-title">Contacts & Messaging</div>
           <div class="feature-desc">Save contacts by name. Ask Manvi to forward a message to anyone in your address book — she resolves the number and dispatches it instantly.</div>
           <div class="feature-example">"Tell Ravi I'll be there at 7"</div>
         </div>
         <div class="feature-card reveal" style="transition-delay:0.25s">
-          <div class="feature-icon">💬</div>
+          <div class="feature-icon material-symbols-rounded" aria-hidden="true">chat</div>
           <div class="feature-title">Conversational AI</div>
           <div class="feature-desc">When you're not managing tasks, just talk. Manvi runs a 4-tier AI waterfall (Gemini → Groq → OpenRouter) and always keeps a fallback ready.</div>
           <div class="feature-example">"Explain quantum computing simply"</div>
