@@ -164,12 +164,12 @@ app.get("/api/ping", async (req, res) => {
 // /api/tick?secret=... — called by cron-job.org every minute
 //
 // This is the primary reliability mechanism for hosted environments
-// (e.g. Render) where the process may sleep between requests.
+// where the process may sleep between requests or scale to zero.
 // Calling this endpoint runs all three dispatch jobs immediately,
 // catching up on any reminders/routines missed during sleep.
 //
 // Set CRON_SECRET in your environment. Configure cron-job.org to GET:
-//   https://your-app.onrender.com/api/tick?secret=YOUR_CRON_SECRET
+//   https://manvi-bot.vercel.app/api/tick?secret=YOUR_CRON_SECRET
 // every 1 minute.
 // ---------------------------------------------------------
 app.get("/api/tick", async (req, res) => {

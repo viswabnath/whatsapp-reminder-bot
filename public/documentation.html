@@ -27,7 +27,7 @@
   <link rel="manifest" href="/assets/favicon-onemark/site.webmanifest" />
 
   <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,300&display=swap" rel="stylesheet"><style>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,300&family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20..48,400,0,0&display=swap" rel="stylesheet"><style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
     :root {
@@ -423,9 +423,20 @@
     }
 
     .feat-item-title {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
       font-size: 0.88rem;
       font-weight: 600;
       margin-bottom: 0.25rem;
+    }
+
+    .feature-icon {
+      color: var(--green-dark);
+      font-family: 'Material Symbols Rounded';
+      font-size: 1.15rem;
+      line-height: 1;
+      flex-shrink: 0;
     }
 
     .feat-item-desc {
@@ -507,7 +518,7 @@
       <div class="sidebar-section">
         <div class="sidebar-section-title">Deployment</div>
         <ul class="sidebar-links">
-          <li><a href="#render">Deploy to Render</a></li>
+          <li><a href="#vercel">Deploy to Vercel</a></li>
           <li><a href="#keepalive">Keep-alive setup</a></li>
           <li><a href="#testing">Testing locally</a></li>
         </ul>
@@ -533,7 +544,7 @@
         <h1>Introduction</h1>
         <p class="lead">Manvi is a personal AI assistant that operates entirely inside WhatsApp. Send a message in plain English — she understands your intent, executes the action, and responds instantly. No app to install, no account to create beyond your existing WhatsApp.</p>
 
-        <p>Manvi is self-hosted. You run your own instance on Render, connect it to your own Meta WhatsApp Business account, and the only data that touches a third-party service is your API calls to Gemini, Groq, and your Supabase database.</p>
+        <p>Manvi is self-hosted. You run your own instance on Vercel, connect it to your own Meta WhatsApp Business account, and the only data that touches a third-party service is your API calls to Gemini, Groq, and your Supabase database.</p>
 
         <div class="callout">
           <div class="callout-title">Who this is for</div>
@@ -542,20 +553,20 @@
 
         <h3>What Manvi can do in v1.1.1</h3>
         <div class="feat-list">
-          <div class="feat-item"><div class="feat-item-title">⏰ Reminders</div><div class="feat-item-desc">One-off reminders at a specific time or on a future date. Vague times like "morning" or "evening" are resolved automatically.</div></div>
-          <div class="feat-item"><div class="feat-item-title">🔁 Daily Routines</div><div class="feat-item-desc">Recurring tasks at a fixed time, every day indefinitely.</div></div>
-          <div class="feat-item"><div class="feat-item-title">📅 Weekly &amp; Monthly Recurring</div><div class="feat-item-desc">Reminders on a specific day of the week or day of the month — every Tuesday, the 1st of every month, etc.</div></div>
-          <div class="feat-item"><div class="feat-item-title">✏️ Edit &amp; Undo</div><div class="feat-item-desc">Correct the last reminder with a follow-up — "Actually make that 6 PM" updates it in place.</div></div>
-          <div class="feat-item"><div class="feat-item-title">🧠 Conversational Memory</div><div class="feat-item-desc">Manvi remembers the last 4 messages, enabling natural follow-up questions without repeating context.</div></div>
-          <div class="feat-item"><div class="feat-item-title">🎂 Birthdays &amp; Events</div><div class="feat-item-desc">Save once, get reminded every year with advance alerts.</div></div>
-          <div class="feat-item"><div class="feat-item-title">📇 Contacts &amp; Messaging</div><div class="feat-item-desc">Save contacts and forward messages by name.</div></div>
-          <div class="feat-item"><div class="feat-item-title">🔍 Web Search</div><div class="feat-item-desc">Real-time web search via Tavily with Serper fallback. Results formatted for WhatsApp.</div></div>
-          <div class="feat-item"><div class="feat-item-title">💬 Conversational AI</div><div class="feat-item-desc">4-tier AI waterfall for general questions and chat.</div></div>
-          <div class="feat-item"><div class="feat-item-title">🗑 Delete Tasks</div><div class="feat-item-desc">Delete any reminder, routine, recurring task, or event by name.</div></div>
-          <div class="feat-item"><div class="feat-item-title">🎤 Media Handling</div><div class="feat-item-desc">Voice notes, images, and other media get a clear "text only" reply instead of silently failing.</div></div>
-          <div class="feat-item"><div class="feat-item-title">🩺 Health Tracking</div><div class="feat-item-desc">Visual 90-day uptime history with downtime detection (Red/Green) and "Last Run" tracking for all background jobs.</div></div>
-          <div class="feat-item"><div class="feat-item-title">⚡️ Keep-Alive</div><div class="feat-item-desc">External cron trigger (<code>/api/tick</code>) called every minute by cron-job.org ensures reminders fire even after a cold restart. Self-ping every 4 minutes as secondary keep-alive.</div></div>
-          <div class="feat-item"><div class="feat-item-title">🔒 Webhook Security</div><div class="feat-item-desc">Verifies Meta's <code>X-Hub-Signature-256</code> on every incoming webhook. Per-user rate limiting (10 messages/minute) protects AI quota from abuse.</div></div>
+          <div class="feat-item"><div class="feat-item-title"><span class="material-symbols-rounded feature-icon" aria-hidden="true">schedule</span>Reminders</div><div class="feat-item-desc">One-off reminders at a specific time or on a future date. Vague times like "morning" or "evening" are resolved automatically.</div></div>
+          <div class="feat-item"><div class="feat-item-title"><span class="material-symbols-rounded feature-icon" aria-hidden="true">routine</span>Daily Routines</div><div class="feat-item-desc">Recurring tasks at a fixed time, every day indefinitely.</div></div>
+          <div class="feat-item"><div class="feat-item-title"><span class="material-symbols-rounded feature-icon" aria-hidden="true">event_repeat</span>Weekly &amp; Monthly Recurring</div><div class="feat-item-desc">Reminders on a specific day of the week or day of the month — every Tuesday, the 1st of every month, etc.</div></div>
+          <div class="feat-item"><div class="feat-item-title"><span class="material-symbols-rounded feature-icon" aria-hidden="true">edit</span>Edit &amp; Undo</div><div class="feat-item-desc">Correct the last reminder with a follow-up — "Actually make that 6 PM" updates it in place.</div></div>
+          <div class="feat-item"><div class="feat-item-title"><span class="material-symbols-rounded feature-icon" aria-hidden="true">psychology</span>Conversational Memory</div><div class="feat-item-desc">Manvi remembers the last 4 messages, enabling natural follow-up questions without repeating context.</div></div>
+          <div class="feat-item"><div class="feat-item-title"><span class="material-symbols-rounded feature-icon" aria-hidden="true">cake</span>Birthdays &amp; Events</div><div class="feat-item-desc">Save once, get reminded every year with advance alerts.</div></div>
+          <div class="feat-item"><div class="feat-item-title"><span class="material-symbols-rounded feature-icon" aria-hidden="true">contacts</span>Contacts &amp; Messaging</div><div class="feat-item-desc">Save contacts and forward messages by name.</div></div>
+          <div class="feat-item"><div class="feat-item-title"><span class="material-symbols-rounded feature-icon" aria-hidden="true">search</span>Web Search</div><div class="feat-item-desc">Real-time web search via Tavily with Serper fallback. Results formatted for WhatsApp.</div></div>
+          <div class="feat-item"><div class="feat-item-title"><span class="material-symbols-rounded feature-icon" aria-hidden="true">chat</span>Conversational AI</div><div class="feat-item-desc">4-tier AI waterfall for general questions and chat.</div></div>
+          <div class="feat-item"><div class="feat-item-title"><span class="material-symbols-rounded feature-icon" aria-hidden="true">delete</span>Delete Tasks</div><div class="feat-item-desc">Delete any reminder, routine, recurring task, or event by name.</div></div>
+          <div class="feat-item"><div class="feat-item-title"><span class="material-symbols-rounded feature-icon" aria-hidden="true">mic</span>Media Handling</div><div class="feat-item-desc">Voice notes, images, and other media get a clear "text only" reply instead of silently failing.</div></div>
+          <div class="feat-item"><div class="feat-item-title"><span class="material-symbols-rounded feature-icon" aria-hidden="true">monitor_heart</span>Health Tracking</div><div class="feat-item-desc">Visual 90-day uptime history with downtime detection (Red/Green) and "Last Run" tracking for all background jobs.</div></div>
+          <div class="feat-item"><div class="feat-item-title"><span class="material-symbols-rounded feature-icon" aria-hidden="true">bolt</span>Keep-Alive</div><div class="feat-item-desc">External cron trigger (<code>/api/tick</code>) called every minute by cron-job.org ensures reminders fire even after a cold restart. Self-ping every 4 minutes as secondary keep-alive.</div></div>
+          <div class="feat-item"><div class="feat-item-title"><span class="material-symbols-rounded feature-icon" aria-hidden="true">lock</span>Webhook Security</div><div class="feat-item-desc">Verifies Meta's <code>X-Hub-Signature-256</code> on every incoming webhook. Per-user rate limiting (10 messages/minute) protects AI quota from abuse.</div></div>
         </div>
       </div>
 
@@ -574,7 +585,7 @@
             <tr><td><strong>OpenRouter</strong></td><td>GPT-4o-mini (Tier 4 AI fallback — minimal paid usage)</td><td><a href="https://openrouter.ai" target="_blank">openrouter.ai</a></td></tr>
             <tr><td><strong>Tavily</strong></td><td>Web search (primary)</td><td><a href="https://www.tavily.com" target="_blank">tavily.com</a></td></tr>
             <tr><td><strong>Serper</strong></td><td>Web search fallback</td><td><a href="https://serper.dev" target="_blank">serper.dev</a></td></tr>
-            <tr><td><strong>Render</strong></td><td>Hosting — free web service tier</td><td><a href="https://render.com" target="_blank">render.com</a></td></tr>
+            <tr><td><strong>Vercel</strong></td><td>Hosting and serverless Node.js runtime</td><td><a href="https://vercel.com" target="_blank">vercel.com</a></td></tr>
           </tbody>
         </table>
       </div>
@@ -611,7 +622,7 @@
         <table class="doc-table">
           <thead><tr><th>Variable</th><th>Description</th><th></th></tr></thead>
           <tbody>
-            <tr><td><code>PORT</code></td><td>Port the Express server listens on. Render sets this automatically.</td><td></td></tr>
+            <tr><td><code>PORT</code></td><td>Port the Express server listens on locally.</td><td></td></tr>
             <tr><td><code>VERIFY_TOKEN</code></td><td>Any string you choose. Must match what you set in the Meta webhook config.</td><td><span class="badge-required">required</span></td></tr>
             <tr><td><code>MY_PHONE_NUMBER</code></td><td>Your WhatsApp number in international format, no <code>+</code>. E.g. <code>919876543210</code></td><td><span class="badge-required">required</span></td></tr>
             <tr><td><code>PHONE_NUMBER_ID</code></td><td>From Meta developer console → WhatsApp → API Setup.</td><td><span class="badge-required">required</span></td></tr>
@@ -911,25 +922,24 @@ I can only read text messages right now. I cannot process voice notes. Please ty
       </div>
 
       <!-- DEPLOYMENT -->
-      <div class="doc-section" id="render">
-        <h2>Deploy to Render</h2>
+      <div class="doc-section" id="vercel">
+        <h2>Deploy to Vercel</h2>
         <ol>
           <li>Push your repo (with a filled <code>.env.example</code> but no <code>.env</code>) to GitHub</li>
-          <li>In Render, create a new <strong>Web Service</strong> → connect your GitHub repo</li>
-          <li>Set <strong>Build command</strong>: <code>npm install</code></li>
-          <li>Set <strong>Start command</strong>: <code>npm start</code></li>
-          <li>Add all environment variables in the Render <strong>Environment</strong> tab</li>
+          <li>In Vercel, create a new project and import your GitHub repository</li>
+          <li>Vercel detects the Node.js configuration from <code>vercel.json</code></li>
+          <li>Add all environment variables in the Vercel <strong>Environment Variables</strong> settings</li>
           <li>Deploy. Your URL will be <code>https://manvi-bot.vercel.app</code></li>
         </ol>
         <div class="callout">
-          <div class="callout-title">Free tier sleep</div>
-          <p>Render free instances sleep after 15 minutes of inactivity. Set up a keep-alive ping — see below.</p>
+          <div class="callout-title">External tick</div>
+          <p>Use the protected <code>/api/tick</code> endpoint with an external cron service so scheduled jobs continue to run reliably.</p>
         </div>
       </div>
 
       <div class="doc-section" id="keepalive">
         <h2>Keep-alive &amp; uptime monitoring</h2>
-        <p>Render free instances sleep after 15 minutes of inactivity. When sleeping, the in-process cron jobs stop ticking. The solution is two layers: an external cron trigger that runs dispatch jobs on-demand, and UptimeRobot for downtime alerting.</p>
+        <p>The in-process cron jobs are supplemented by an external tick endpoint. This lets a hosted deployment invoke reminder dispatch on demand, while UptimeRobot provides downtime alerting.</p>
 
         <h3>Step 1 — External cron trigger (cron-job.org)</h3>
         <p>This is the primary reliability mechanism. <a href="https://cron-job.org" target="_blank">cron-job.org</a> (free) calls <code>/api/tick</code> every minute. This both keeps the service awake and runs the reminder/routine dispatch logic — so reminders fire even after a cold restart.</p>
@@ -939,7 +949,7 @@ I can only read text messages right now. I cannot process voice notes. Please ty
           <li>URL: <code>https://manvi-bot.vercel.app/api/tick?secret=YOUR_CRON_SECRET</code></li>
           <li>Schedule: every <strong>1 minute</strong></li>
         </ol>
-        <p>Set <code>CRON_SECRET</code> and <code>PUBLIC_URL</code> in your Render environment variables. The server also self-pings <code>/api/tick</code> every 4 minutes as a secondary keep-alive.</p>
+        <p>Set <code>CRON_SECRET</code> and <code>PUBLIC_URL</code> in your Vercel environment variables. The server also self-pings <code>/api/tick</code> every 4 minutes as a secondary trigger.</p>
 
         <h3>Step 2 — Downtime alerting (UptimeRobot)</h3>
         <p>Use <a href="https://uptimerobot.com" target="_blank">UptimeRobot</a> (free) for mobile push alerts if your bot goes down.</p>

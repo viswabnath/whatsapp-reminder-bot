@@ -2,8 +2,8 @@
 
 A personal AI assistant that works entirely inside WhatsApp. Set reminders, manage daily routines, save contacts, search the web, and forward messages — all by sending a text.
 
-**Live:** [manvi.onrender.com](https://manvi.onrender.com)
-**Docs:** [manvi.onrender.com/documentation](https://manvi.onrender.com/documentation)
+**Live:** [manvi-bot.vercel.app](https://manvi-bot.vercel.app)
+**Docs:** [manvi-bot.vercel.app/documentation](https://manvi-bot.vercel.app/documentation)
 
 ---
 
@@ -17,7 +17,7 @@ cp .env.example .env   # fill in your keys
 npm run dev
 ```
 
-Full setup guide — including Meta webhook configuration, Supabase schema, and Render deployment — is at [manvi.onrender.com/documentation](https://manvi.onrender.com/documentation).
+Full setup guide — including Meta webhook configuration, Supabase schema, and Vercel deployment — is at [manvi-bot.vercel.app/documentation](https://manvi-bot.vercel.app/documentation).
 
 ---
 
@@ -44,7 +44,7 @@ Full setup guide — including Meta webhook configuration, Supabase schema, and 
 
 ## Stack
 
-- **Runtime:** Node.js + Express on Render (free tier)
+- **Runtime:** Node.js + Express on Vercel
 - **Database:** Supabase (PostgreSQL)
 - **Messaging:** Meta WhatsApp Cloud API
 - **AI:** Gemini 3 Flash → Gemini 2.5 Flash → Groq Llama 3.3 → OpenRouter GPT-4o-mini
@@ -182,7 +182,7 @@ Test suites: Supabase connectivity (7 tables), AI intent parsing (20 cases), rem
 - **Job Heartbeats:** Track "Last Run" timestamps for every background task (reminders, routines, etc.) directly on the dashboard.
 - **90-Day History:** Visual history grid now shows a full 90-day window with intelligent gap filling.
 - **Continuous Tracking:** Bot now auto-creates a daily record even on idle days to ensure true uptime history.
-- **Self-Pinging Keep-Alive:** Optional `PUBLIC_URL` setting to prevent hosting platforms (like Render) from sleeping.
+- **Self-Pinging Keep-Alive:** Optional `PUBLIC_URL` setting for external tick and health monitoring.
 
 ### v1.1
 - **Conversational memory:** Bot reads last 4 turns from `interaction_logs` before each AI call — enables natural follow-up questions
